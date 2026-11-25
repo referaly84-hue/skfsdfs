@@ -11605,8 +11605,9 @@ function fixLineup(L, tid, f, allowLoan = false, excludePids?: Set<string>) {
     slots: slotResult.entries.map((e) => ({ slot: e.slotPos, pid: e.pid })),
     roles: mergedRoles,
     plannedSubs,
-    speech: L.speech || "",
-    training: L.training || ""
+    tactics: String(L.tactics || "").slice(0, 10000),
+    speech: String(L.speech || "").slice(0, 10000),
+    training: String(L.training || "").slice(0, 7000)
   };
 }
 function tacticPresetLabelFor(f: any, tid: string, side?: "home" | "away" | null): string {
@@ -11623,10 +11624,11 @@ function tacticPresetLabelFor(f: any, tid: string, side?: "home" | "away" | null
 }
 function recordTacticSnapshot(tid: string, f: any, L: any, side?: "home" | "away" | null) {
   if (!tid || !f || !L) return;
+  const tactics = String(L.tactics || "").trim();
   const speech = String(L.speech || "").trim();
   const training = String(L.training || "").trim();
   const plannedSubs = Array.isArray(L.plannedSubs) ? L.plannedSubs : [];
-  if (!speech && !training && !plannedSubs.length) return;
+  if (!tactics && !speech && !training && !plannedSubs.length) return;
   if (!db.tacticsHistory || typeof db.tacticsHistory !== "object") db.tacticsHistory = {};
   const list: any[] = Array.isArray(db.tacticsHistory[tid]) ? db.tacticsHistory[tid] : [];
   const fm = String(L.formation || "4-3-3");
@@ -11637,6 +11639,7 @@ function recordTacticSnapshot(tid: string, f: any, L: any, side?: "home" | "away
     it.fid === f.id &&
     (it.side || null) === normSide &&
     String(it.formation || "") === fm &&
+    String(it.tactics || "").trim() === tactics &&
     String(it.speech || "").trim() === speech &&
     String(it.training || "").trim() === training
   );
@@ -11647,8 +11650,9 @@ function recordTacticSnapshot(tid: string, f: any, L: any, side?: "home" | "away
     label,
     date: f.date || "",
     formation: fm,
-    speech: String(L.speech || ""),
-    training: String(L.training || ""),
+    tactics: String(L.tactics || "").slice(0, 10000),
+    speech: String(L.speech || "").slice(0, 10000),
+    training: String(L.training || "").slice(0, 7000),
     plannedSubs: plannedSubs.map((x: any) => ({ ...x })),
     roles: L.roles ? { ...L.roles } : {},
     savedAt: Date.now()
@@ -11662,14 +11666,15 @@ function buildClubTacticPresets(tid: string): any[] {
   const seenSig = new Set<string>();
   const addItem = (it: any) => {
     if (!it) return;
+    const tc = String(it.tactics || "");
     const sp = String(it.speech || "");
     const tr = String(it.training || "");
     const subs = Array.isArray(it.plannedSubs) ? it.plannedSubs : [];
-    if (!sp.trim() && !tr.trim() && !subs.length) return;
-    const sig = `${it.fid || ""}|${it.side || ""}|${it.formation || ""}|${sp.trim()}|${tr.trim()}`;
+    if (!tc.trim() && !sp.trim() && !tr.trim() && !subs.length) return;
+    const sig = `${it.fid || ""}|${it.side || ""}|${it.formation || ""}|${tc.trim()}|${sp.trim()}|${tr.trim()}`;
     if (seenSig.has(sig)) return;
     seenSig.add(sig);
-    const previewSrc = sp.trim() || tr.trim() || `Замен: ${subs.length}`;
+    const previewSrc = tc.trim() || sp.trim() || tr.trim() || `Замен: ${subs.length}`;
     const snippet = previewSrc.replace(/\s+/g, " ").slice(0, 48) + (previewSrc.length > 48 ? "…" : "");
     out.push({
       id: it.id || ("tp_" + uid()),
@@ -11679,6 +11684,7 @@ function buildClubTacticPresets(tid: string): any[] {
       title: `${it.label || "Тактика"} · ${it.formation || "4-3-3"} — «${snippet}»`,
       date: it.date || "",
       formation: it.formation || "4-3-3",
+      tactics: tc,
       speech: sp,
       training: tr,
       plannedSubs: subs.map((x: any) => ({ ...x })),
@@ -11703,6 +11709,7 @@ function buildClubTacticPresets(tid: string): any[] {
       label: tacticPresetLabelFor(f, tid, side),
       date: f?.date || "",
       formation: (L as any).formation || "4-3-3",
+      tactics: (L as any).tactics || "",
       speech: (L as any).speech || "",
       training: (L as any).training || "",
       plannedSubs: Array.isArray((L as any).plannedSubs) ? (L as any).plannedSubs : [],
@@ -11714,7 +11721,7 @@ function buildClubTacticPresets(tid: string): any[] {
   for (const le of lineupEntries) addItem(le);
   // Preserve legacy club-wide db.tactics speech/training if present so nothing already written is lost
   const leg = db.tactics?.[tid];
-  if (leg && (String(leg.speech || "").trim() || String(leg.training || "").trim())) {
+  if (leg && (String(leg.tactics || "").trim() || String(leg.speech || "").trim() || String(leg.training || "").trim())) {
     addItem({
       id: "legacy_" + tid,
       fid: null,
@@ -11722,6 +11729,7 @@ function buildClubTacticPresets(tid: string): any[] {
       label: "Ранее сохранённый шаблон",
       date: "",
       formation: leg.formation || "4-3-3",
+      tactics: leg.tactics || "",
       speech: leg.speech || "",
       training: leg.training || "",
       plannedSubs: Array.isArray(leg.plannedSubs) ? leg.plannedSubs : [],
@@ -11735,10 +11743,10 @@ function getLineup(f, tid, side?: "home" | "away", excludePids?: Set<string>) {
   const k = lineupKey(f, tid, side);
   const own = db.lineups[k];
   const base = own || ((isIntraSquad(f) && side === "away")
-    ? { formation: db.tactics[tid]?.formation || "4-3-3", starters: [], bench: [], speech: "", training: "", plannedSubs: [] }
+    ? { formation: db.tactics[tid]?.formation || "4-3-3", starters: [], bench: [], tactics: "", speech: "", training: "", plannedSubs: [] }
     : (db.tactics[tid]
-      ? { formation: db.tactics[tid].formation || "4-3-3", starters: db.tactics[tid].starters || [], bench: db.tactics[tid].bench || [], slots: db.tactics[tid].slots, roles: db.tactics[tid].roles, speech: "", training: "", plannedSubs: [] }
-      : { formation: "4-3-3", speech: "", training: "", plannedSubs: [] }));
+      ? { formation: db.tactics[tid].formation || "4-3-3", starters: db.tactics[tid].starters || [], bench: db.tactics[tid].bench || [], slots: db.tactics[tid].slots, roles: db.tactics[tid].roles, tactics: "", speech: "", training: "", plannedSubs: [] }
+      : { formation: "4-3-3", tactics: "", speech: "", training: "", plannedSubs: [] }));
   return { ...fixLineup(base, tid, f, !!own, excludePids), submitted: !!own };
 }
 function motivText(tid, f, displayName?: string) {
@@ -12369,8 +12377,9 @@ ${L.bench.map((p) => "- " + rowBench(p)).join("\n")}
 }
 function buildUser(ctx, a, b, st, issues, mode = "full") {
   const H = ctx.sides.home.name, A = ctx.sides.away.name;
-  const sp = (s) => (ctx.lineup[s].speech || "").trim() ? `\xAB${ctx.lineup[s].speech.trim()}\xBB` : "(\u0442\u0440\u0435\u043D\u0435\u0440 \u043F\u0440\u043E\u043C\u043E\u043B\u0447\u0430\u043B \u043F\u0435\u0440\u0435\u0434 \u0432\u044B\u0445\u043E\u0434\u043E\u043C \u2014 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u043F\u043E \u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u043E\u043C\u0443 \u043F\u043B\u0430\u043D\u0443)";
-  const tr = (s) => (ctx.lineup[s].training || "").trim() ? `\xAB${ctx.lineup[s].training.trim()}\xBB` : "(\u0442\u0440\u0435\u043D\u0438\u0440\u043E\u0432\u043E\u0447\u043D\u044B\u0439 \u043C\u0438\u043A\u0440\u043E\u0446\u0438\u043A\u043B: \u043E\u0431\u0449\u0435\u043A\u043E\u043C\u0430\u043D\u0434\u043D\u0430\u044F \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430, \u043E\u0442\u0440\u0430\u0431\u043E\u0442\u043A\u0430 \u0442\u0430\u043A\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0445 \u0441\u0432\u044F\u0437\u043E\u043A \u0438 \u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043E\u0432)";
+  const tc = (s) => (ctx.lineup[s].tactics || "").trim() ? `«${ctx.lineup[s].tactics.trim()}»` : "(отдельная тактическая установка не задана — команда действует по базовой схеме и философии тренера)";
+  const sp = (s) => (ctx.lineup[s].speech || "").trim() ? `«${ctx.lineup[s].speech.trim()}»` : "(тренер промолчал в раздевалке перед выходом на поле)";
+  const tr = (s) => (ctx.lineup[s].training || "").trim() ? `«${ctx.lineup[s].training.trim()}»` : "(тренировочный микроцикл: общекомандная подготовка, отработка тактических связок и стандартов)";
   const cInfo = (s) => {
     const c = ctx.coaches[s];
     const staffNote = ctx.staff?.[s] && ctx.staff[s] !== "\u043D\u0435\u0442 \u0434\u0430\u043D\u043D\u044B\u0445 \u043E \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u043D\u043E\u043C \u0448\u0442\u0430\u0431\u0435" ? ` \u0422\u0440\u0435\u043D\u0435\u0440\u0441\u043A\u0438\u0439 \u0448\u0442\u0430\u0431: ${ctx.staff[s]}.` : "";
@@ -12530,9 +12539,13 @@ ${refInfo()}
 - \u041D\u0435\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0446\u0438\u043A\u043B ${H}: ${tr("home")}
 - \u041D\u0435\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0446\u0438\u043A\u043B ${A}: ${tr("away")}
 `;
-  u += `7. \u0422\u0410\u041A\u0422\u0418\u0427\u0415\u0421\u041A\u0418\u0415 \u0421\u0425\u0415\u041C\u042B \u0418 \u0423\u0421\u0422\u0410\u041D\u041E\u0412\u041A\u0410 \u041D\u0410 \u0418\u0413\u0420\u0423:
-- ${H} (\u0441\u0445\u0435\u043C\u0430 ${ctx.lineup.home.formation}): ${sp("home")}
-- ${A} (\u0441\u0445\u0435\u043C\u0430 ${ctx.lineup.away.formation}): ${sp("away")}
+  u += `7. ТАКТИЧЕСКИЕ СХЕМЫ, УСТАНОВКА И РЕЧЬ ТРЕНЕРА:
+- ${H} (схема ${ctx.lineup.home.formation}):
+  • Тактика на игру: ${tc("home")}
+  • Речь тренера в раздевалке: ${sp("home")}
+- ${A} (схема ${ctx.lineup.away.formation}):
+  • Тактика на игру: ${tc("away")}
+  • Речь тренера в раздевалке: ${sp("away")}
 `;
   if (ctx.matchBonuses?.home?.hasBonus || ctx.matchBonuses?.away?.hasBonus) {
     u += `7.1. ПРЕМИАЛЬНЫЕ И ФИНАНСОВАЯ МОТИВАЦИЯ ОТ РУКОВОДСТВА:
@@ -19149,7 +19162,8 @@ app.get("/api/match/:id", async (req, res) => {
             roleNames: Object.fromEntries(
               Object.entries(m.ctx.roles?.[s] || L.roles || {}).map(([k, pid]) => [k, m.ctx.names?.[pid as string] || player(pid as string)?.name || String(pid)])
             ),
-            speech: canSeeTactics ? L.speech || "(установка не заполнена)" : void 0,
+            tactics: canSeeTactics ? L.tactics || "" : void 0,
+            speech: canSeeTactics ? L.speech || "" : void 0,
             training: canSeeTactics ? L.training || "" : void 0,
             plannedSubs: canSeeTactics || f.status === "done"
               ? (L.plannedSubs || []).map((ps: any) => ({
@@ -19244,7 +19258,8 @@ app.get("/api/match/:id", async (req, res) => {
         roleNames: Object.fromEntries(
           Object.entries(rolesObj).map(([k, pid]) => [k, player(pid)?.name || String(pid)])
         ),
-        speech: canSeeTactics ? L.speech || "(\u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0430 \u043D\u0435 \u0437\u0430\u043F\u043E\u043B\u043D\u0435\u043D\u0430)" : void 0,
+        tactics: canSeeTactics ? L.tactics || "" : void 0,
+        speech: canSeeTactics ? L.speech || "" : void 0,
         training: canSeeTactics ? L.training || "" : void 0,
         starters: orderedIds.map((id) => {
           const p = player(id);
@@ -21788,7 +21803,7 @@ app.get("/api/club", needClub, (req, res) => {
       loanedToId: p.teamId || null
     })),
     tactic: db.tactics[req.tid]
-      ? { ...db.tactics[req.tid], speech: "", training: "", plannedSubs: [] }
+      ? { ...db.tactics[req.tid], tactics: "", speech: "", training: "", plannedSubs: [] }
       : null,
     tacticPresets: buildClubTacticPresets(req.tid),
     upcoming: upcomingWithFatigue,
@@ -23671,8 +23686,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
           slots: slotRes.entries.map((e) => ({ slot: e.slotPos, pid: e.pid })),
           roles,
           plannedSubs,
-          speech: String(payload?.speech || "").slice(0, 20000),
-          training: String(payload?.training || "").slice(0, 10000),
+          tactics: String(payload?.tactics || "").slice(0, 10000),
+          speech: String(payload?.speech || "").slice(0, 10000),
+          training: String(payload?.training || "").slice(0, 7000),
           at: Date.now()
         }
       };
@@ -23759,8 +23775,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
     slots: slotRes.entries.map((e) => ({ slot: e.slotPos, pid: e.pid })),
     roles,
     plannedSubs,
-    speech: String(req.body.speech || "").slice(0, 20000),
-    training: String(req.body.training || "").slice(0, 10000),
+    tactics: String(req.body.tactics || "").slice(0, 10000),
+    speech: String(req.body.speech || "").slice(0, 10000),
+    training: String(req.body.training || "").slice(0, 7000),
     at: Date.now()
   };
   db.lineups[f.id + ":" + req.tid] = L;
@@ -23775,6 +23792,7 @@ app.post("/api/club/lineup", needClub, (req, res) => {
     slots: ownSlotEntries,
     roles: normalizeRoles(roles, ownIds),
     plannedSubs: [],
+    tactics: "",
     speech: "",
     training: "",
     at: L.at
@@ -23792,7 +23810,7 @@ app.post("/api/club/lineup", needClub, (req, res) => {
 app.post("/api/club/roles", needClub, (req, res) => {
   const ownIds = new Set(squadOf(req.tid).map((p) => p.id));
   const roles = normalizeRoles(req.body.roles, ownIds);
-  const cur = db.tactics[req.tid] || { formation: "4-3-3", starters: [], bench: [], speech: "", training: "" };
+  const cur = db.tactics[req.tid] || { formation: "4-3-3", starters: [], bench: [], tactics: "", speech: "", training: "" };
   db.tactics[req.tid] = { ...cur, roles, at: Date.now() };
   for (const f of db.fixtures || []) {
     if (f.status === "scheduled" && !isIntraSquad(f) && (f.home === req.tid || f.away === req.tid)) {
@@ -23805,6 +23823,23 @@ app.post("/api/club/roles", needClub, (req, res) => {
   }
   save();
   res.json({ ok: 1, roles });
+});
+app.post("/api/club/tactics/clear-tactics", needClub, (req, res) => {
+  const now = Date.now();
+  const f = req.body?.fid ? fx(req.body.fid) : null;
+  if (!f && db.tactics[req.tid]) {
+    db.tactics[req.tid].tactics = "";
+    db.tactics[req.tid].at = now;
+  }
+  if (f && (f.home === req.tid || f.away === req.tid) && f.status === "scheduled") {
+    const k = lineupKey(f, req.tid, req.body?.side);
+    if (db.lineups[k]) {
+      db.lineups[k].tactics = "";
+      db.lineups[k].at = now;
+    }
+  }
+  save();
+  res.json({ ok: 1 });
 });
 app.post("/api/club/tactics/clear-speech", needClub, (req, res) => {
   const now = Date.now();
@@ -25565,8 +25600,8 @@ app.post("/api/admin/ask", admin, async (req, res) => {
   const user = `\u041C\u0410\u0422\u0427 ${H} ${f.hg}:${f.ag} ${A}${f.pen ? ` (\u043F\u0435\u043D. ${f.pen.hg}:${f.pen.ag})` : ""}. ${m.ctx.comp}, ${m.ctx.roundLabel}.
 \u041A\u043E\u043D\u0442\u0435\u043A\u0441\u0442: ${m.ctx.motiv.home} | ${m.ctx.motiv.away} | \u041F\u0440\u043E\u0442\u0438\u0432\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435: ${m.ctx.derby} | \u041F\u043E\u0433\u043E\u0434\u0430: ${m.ctx.weather}
 \u0423\u0441\u0442\u0430\u043B\u043E\u0441\u0442\u044C: ${m.ctx.fat.home} | ${m.ctx.fat.away}
-\u0420\u0435\u0447\u044C ${H}: \xAB${m.ctx.lineup.home.speech || "\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u0435"}\xBB \u0422\u0440\u0435\u043D\u0438\u0440\u043E\u0432\u043A\u0438: \xAB${m.ctx.lineup.home.training || "\u2014"}\xBB
-\u0420\u0435\u0447\u044C ${A}: \xAB${m.ctx.lineup.away.speech || "\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u0435"}\xBB \u0422\u0440\u0435\u043D\u0438\u0440\u043E\u0432\u043A\u0438: \xAB${m.ctx.lineup.away.training || "\u2014"}\xBB
+Тактика ${H}: «${m.ctx.lineup.home.tactics || "—"}» Речь ${H}: «${m.ctx.lineup.home.speech || "молчание"}» Тренировки: «${m.ctx.lineup.home.training || "—"}»
+Тактика ${A}: «${m.ctx.lineup.away.tactics || "—"}» Речь ${A}: «${m.ctx.lineup.away.speech || "молчание"}» Тренировки: «${m.ctx.lineup.away.training || "—"}»
 \u0421\u0445\u0435\u043C\u044B: ${m.ctx.lineup.home.formation} / ${m.ctx.lineup.away.formation}
 \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430: ${JSON.stringify(st.teams)} \u0432\u043B\u0430\u0434\u0435\u043D\u0438\u0435 ${st.poss.join("-")}
 \u0418\u0433\u0440\u043E\u043A\u0438: ${Object.values(st.players).map((p) => `${p.n}: ${p.min}', ${p.g}\u0433 ${p.a}\u043F ${p.sh}\u0443\u0434 xG${p.xg} ${p.tk}\u043E\u0442\u0431 ${p.sv}\u0441\u0435\u0439\u0432 ${p.yc}\u0436\u043A ${p.rc}\u043A\u043A`).join("; ")}

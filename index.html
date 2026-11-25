@@ -5535,7 +5535,7 @@ function paintMatch() {
       const sideLineup = L[s] || { starters: [], bench: [], name: s === 'home' ? f.homeName : f.awayName, formation: '4-3-3' };
       const sideTid = f[s];
       const logo = s === 'home' ? (f.homeLogo || teamLogo(f.home)) : (f.awayLogo || teamLogo(f.away));
-      const canSeeTactics = S.me?.role === 'admin' || (S.me?.teamId && S.me.teamId === sideTid) || sideLineup.speech !== undefined;
+      const canSeeTactics = S.me?.role === 'admin' || (S.me?.teamId && S.me.teamId === sideTid) || sideLineup.speech !== undefined || sideLineup.tactics !== undefined;
       const coachData = M.coaches?.[s];
       const coachInfo = coachData?.coach;
 
@@ -5590,16 +5590,20 @@ function paintMatch() {
         </div>` : ''}
         ${canSeeTactics ? `
         <h4 style="margin-top:14px;margin-bottom:6px;display:flex;align-items:center;gap:6px">
-          <span>🔒 Установка тренера</span>
+          <span>🔒 Тактика на игру</span>
           <span class="tag" style="font-size:10.5px;background:#e8f0fe;color:#1a73e8;border-color:#aecbfa">только для клуба</span>
         </h4>
-        <div class="qa">${e(sideLineup.speech || '(установка не заполнена)')}</div>
+        <div class="qa">${e(sideLineup.tactics || '(тактика не заполнена)')}</div>
+        <h4 style="margin-top:14px;margin-bottom:6px;display:flex;align-items:center;gap:6px">
+          <span>🗣️ Речь тренера</span>
+        </h4>
+        <div class="qa">${e(sideLineup.speech || '(тренер промолчал)')}</div>
         ${sideLineup.training ? `
         <h4 style="margin-top:14px;margin-bottom:6px">Тренировочный план</h4>
         <div class="qa">${e(sideLineup.training)}</div>` : ''}
         ` : `
         <div class="small muted" style="margin-top:14px;padding:8px 10px;background:var(--soft);border-radius:6px;border:1px dashed var(--line)">
-          🔒 Тактическая установка тренера и план тренировок доступны только владельцу клуба и администратору.
+          🔒 Тактика, речь тренера и план тренировок доступны только владельцу клуба и администратору.
         </div>`}
       </div>`;
     }).join('') + '</div>';
@@ -11404,7 +11408,7 @@ function renderFatigueBadge(fat, available, unavailReason, opts = {}) {
 
 function lineupForm(box, f, c, withT, app) {
   const isAdmin = S.me?.role === 'admin';
-  const L = f.lineup || { ...(f.auto || c.tactic || {}), speech: '', training: '', plannedSubs: [] };
+  const L = f.lineup || { ...(f.auto || c.tactic || {}), tactics: '', speech: '', training: '', plannedSubs: [] };
   const presets = Array.isArray(c.tacticPresets) ? c.tacticPresets : [];
   const order = { ВР: 0, ЛЗ: 1, ЦЗ: 2, ПЗ: 3, ЛП: 4, ОП: 5, ЦП: 6, АП: 7, ПП: 8, ЛВ: 9, ЦФ: 10, ПВ: 11 };
   const sq = [...c.squad].sort((a, b) => (order[a.pos] ?? 6) - (order[b.pos] ?? 6));
@@ -11533,8 +11537,9 @@ function lineupForm(box, f, c, withT, app) {
     </select>
     <button type="button" class="btn sm alt apply-tactic-preset-btn">Подставить</button>
   </div>` : ''}
-  <div class="row" style="justify-content:space-between;align-items:flex-end;gap:8px;margin-top:10px;margin-bottom:4px"><label style="margin:0">Тактика — всё, что тренер говорит игрокам перед матчем</label><button type="button" class="btn sm alt clear-speech-btn">Очистить</button></div><textarea class="sp1" placeholder="Пишите как есть: установка, настрой, речь. Молчание — тоже речь.">${e(L.speech || '')}</textarea>
-  <div class="row" style="justify-content:space-between;align-items:flex-end;gap:8px;margin-top:10px;margin-bottom:4px"><label style="margin:0">Тренировочный план перед матчем (произвольный текст)</label><button type="button" class="btn sm alt clear-training-btn">Очистить</button></div><textarea class="tr1" placeholder="Например: пн — отдых, вт — прессинг 2 часа, ср — стандарты, чт — разминка, пт — отдых">${e(L.training || '')}</textarea>
+  <div class="row" style="justify-content:space-between;align-items:flex-end;gap:8px;margin-top:10px;margin-bottom:4px"><label style="margin:0">Тактика — план на игру, прессинг, игра по сопернику</label><div class="row" style="gap:8px;align-items:center"><span class="small muted tc1-cnt">0 / 10 000</span><button type="button" class="btn sm alt clear-tactics-btn">Очистить</button></div></div><textarea class="tc1" maxlength="10000" placeholder="Опишите тактику: высокий прессинг или низкий блок, игра через фланги/центр, опека лидеров и т.д.">${e(L.tactics || '')}</textarea>
+  <div class="row" style="justify-content:space-between;align-items:flex-end;gap:8px;margin-top:10px;margin-bottom:4px"><label style="margin:0">Речь тренера — всё, что тренер говорит игрокам перед матчем</label><div class="row" style="gap:8px;align-items:center"><span class="small muted sp1-cnt">0 / 10 000</span><button type="button" class="btn sm alt clear-speech-btn">Очистить</button></div></div><textarea class="sp1" maxlength="10000" placeholder="Обращение к команде в раздевалке, настрой, мотивация. Молчание — тоже речь.">${e(L.speech || '')}</textarea>
+  <div class="row" style="justify-content:space-between;align-items:flex-end;gap:8px;margin-top:10px;margin-bottom:4px"><label style="margin:0">Тренировочный план перед матчем (произвольный текст)</label><div class="row" style="gap:8px;align-items:center"><span class="small muted tr1-cnt">0 / 7 000</span><button type="button" class="btn sm alt clear-training-btn">Очистить</button></div></div><textarea class="tr1" maxlength="7000" placeholder="Например: пн — отдых, вт — прессинг 2 часа, ср — стандарты, чт — разминка, пт — отдых">${e(L.training || '')}</textarea>
   <div id="bonuses_editor_mount"></div>
   <div id="tactical_preview_widget" style="margin:14px 0;padding:12px 14px;background:rgba(255,255,255,0.04);border:1px solid var(--line);border-radius:10px;font-size:12.5px;line-height:1.45">
     <div class="muted small">${isAdmin ? '⏳ Анализ состава, позиций и усталости…' : '⏳ Анализ состава и позиций…'}</div>
@@ -11989,13 +11994,14 @@ function lineupForm(box, f, c, withT, app) {
   const updateLiveTactics = async () => {
     if (!liveBox) return;
     const { sPids: starters } = getSelected();
+    const tactics = box.querySelector('.tc1')?.value || '';
     const speech = box.querySelector('.sp1')?.value || '';
     const training = box.querySelector('.tr1')?.value || '';
     const formation = box.querySelector('.fm')?.value || '4-3-3';
     const slotsPayload = currentSlots.length === 11 && starters.length === 11 ? currentSlots : undefined;
 
     try {
-      const res = await api('/club/tactics/preview', withT({ fid: f.id, starters, speech, training, formation, slots: slotsPayload }));
+      const res = await api('/club/tactics/preview', withT({ fid: f.id, starters, tactics, speech, training, formation, slots: slotsPayload }));
       if (!res || !res.ok) return;
       const coach = res.coach || c.team?.coach;
       const slotEntries = Array.isArray(res.slots) ? res.slots : [];
@@ -12052,15 +12058,42 @@ function lineupForm(box, f, c, withT, app) {
     prevTimer = setTimeout(updateLiveTactics, 300);
   };
   schedulePreview();
-  const spEl = box.querySelector('.sp1');
-  const clearSpeechBtn = box.querySelector('.clear-speech-btn');
-  const syncClearSpeechBtn = () => {
-    if (!clearSpeechBtn || !spEl) return;
-    clearSpeechBtn.disabled = !spEl.value.length;
+  const tcEl = box.querySelector('.tc1');
+  const tcCntEl = box.querySelector('.tc1-cnt');
+  const clearTacticsBtn = box.querySelector('.clear-tactics-btn');
+  const syncTacticsMeta = () => {
+    if (tcEl && tcEl.value.length > 10000) tcEl.value = tcEl.value.slice(0, 10000);
+    if (tcCntEl && tcEl) tcCntEl.textContent = `${tcEl.value.length.toLocaleString('ru-RU')} / 10 000`;
+    if (clearTacticsBtn && tcEl) clearTacticsBtn.disabled = !tcEl.value.length;
   };
-  syncClearSpeechBtn();
+  syncTacticsMeta();
+  tcEl?.addEventListener('input', () => {
+    syncTacticsMeta();
+    schedulePreview();
+  });
+  if (clearTacticsBtn && tcEl) {
+    clearTacticsBtn.onclick = async () => {
+      if (!tcEl.value.length) return;
+      clearTacticsBtn.disabled = true;
+      tcEl.value = '';
+      if (f.lineup) f.lineup.tactics = '';
+      syncTacticsMeta();
+      schedulePreview();
+      const r = await act(() => api('/club/tactics/clear-tactics', withT({ fid: f.id })), 'Тактика очищена');
+      if (!r) syncTacticsMeta();
+    };
+  }
+  const spEl = box.querySelector('.sp1');
+  const spCntEl = box.querySelector('.sp1-cnt');
+  const clearSpeechBtn = box.querySelector('.clear-speech-btn');
+  const syncSpeechMeta = () => {
+    if (spEl && spEl.value.length > 10000) spEl.value = spEl.value.slice(0, 10000);
+    if (spCntEl && spEl) spCntEl.textContent = `${spEl.value.length.toLocaleString('ru-RU')} / 10 000`;
+    if (clearSpeechBtn && spEl) clearSpeechBtn.disabled = !spEl.value.length;
+  };
+  syncSpeechMeta();
   spEl?.addEventListener('input', () => {
-    syncClearSpeechBtn();
+    syncSpeechMeta();
     schedulePreview();
   });
   if (clearSpeechBtn && spEl) {
@@ -12069,20 +12102,23 @@ function lineupForm(box, f, c, withT, app) {
       clearSpeechBtn.disabled = true;
       spEl.value = '';
       if (f.lineup) f.lineup.speech = '';
+      syncSpeechMeta();
       schedulePreview();
-      const r = await act(() => api('/club/tactics/clear-speech', withT({ fid: f.id })), 'Тактика очищена');
-      if (!r) syncClearSpeechBtn();
+      const r = await act(() => api('/club/tactics/clear-speech', withT({ fid: f.id })), 'Речь тренера очищена');
+      if (!r) syncSpeechMeta();
     };
   }
   const trEl = box.querySelector('.tr1');
+  const trCntEl = box.querySelector('.tr1-cnt');
   const clearTrainingBtn = box.querySelector('.clear-training-btn');
-  const syncClearTrainingBtn = () => {
-    if (!clearTrainingBtn || !trEl) return;
-    clearTrainingBtn.disabled = !trEl.value.length;
+  const syncTrainingMeta = () => {
+    if (trEl && trEl.value.length > 7000) trEl.value = trEl.value.slice(0, 7000);
+    if (trCntEl && trEl) trCntEl.textContent = `${trEl.value.length.toLocaleString('ru-RU')} / 7 000`;
+    if (clearTrainingBtn && trEl) clearTrainingBtn.disabled = !trEl.value.length;
   };
-  syncClearTrainingBtn();
+  syncTrainingMeta();
   trEl?.addEventListener('input', () => {
-    syncClearTrainingBtn();
+    syncTrainingMeta();
     schedulePreview();
   });
   if (clearTrainingBtn && trEl) {
@@ -12091,9 +12127,10 @@ function lineupForm(box, f, c, withT, app) {
       clearTrainingBtn.disabled = true;
       trEl.value = '';
       if (f.lineup) f.lineup.training = '';
+      syncTrainingMeta();
       schedulePreview();
       const r = await act(() => api('/club/tactics/clear-training', withT({ fid: f.id })), 'Тренировочный план очищен');
-      if (!r) syncClearTrainingBtn();
+      if (!r) syncTrainingMeta();
     };
   }
   const presetSel = box.querySelector('.tactic-preset-sel');
@@ -12103,8 +12140,9 @@ function lineupForm(box, f, c, withT, app) {
       const idx = presetSel.value === '' ? -1 : Number(presetSel.value);
       const pr = presets[idx];
       if (!pr) return toast('Выберите тактику из списка', 1);
-      if (spEl) spEl.value = pr.speech || '';
-      if (trEl) trEl.value = pr.training || '';
+      if (tcEl) tcEl.value = String(pr.tactics || '').slice(0, 10000);
+      if (spEl) spEl.value = String(pr.speech || '').slice(0, 10000);
+      if (trEl) trEl.value = String(pr.training || '').slice(0, 7000);
       const fmEl = box.querySelector('.fm');
       if (fmEl && pr.formation && isCompleteFormation(pr.formation)) {
         const nextFm = String(pr.formation).trim();
@@ -12115,8 +12153,9 @@ function lineupForm(box, f, c, withT, app) {
           renderSlotsEditor();
         }
       }
-      syncClearSpeechBtn();
-      syncClearTrainingBtn();
+      syncTacticsMeta();
+      syncSpeechMeta();
+      syncTrainingMeta();
       schedulePreview();
       toast('Тактика подставлена — нажмите «Сохранить» для этого матча');
     };
@@ -12153,8 +12192,9 @@ function lineupForm(box, f, c, withT, app) {
       slots: slotsPayload.length === 11 ? slotsPayload : undefined,
       roles: rolesPayload,
       plannedSubs: currentPlannedSubs,
-      speech: box.querySelector('.sp1').value,
-      training: box.querySelector('.tr1').value,
+      tactics: (box.querySelector('.tc1')?.value || '').slice(0, 10000),
+      speech: (box.querySelector('.sp1')?.value || '').slice(0, 10000),
+      training: (box.querySelector('.tr1')?.value || '').slice(0, 7000),
       matchBonuses: bonusEditorApi ? bonusEditorApi.getPayload() : undefined
     })), 'Сохранено');
     if (r) pgClub(app);
@@ -12197,8 +12237,8 @@ function intraLineupForm(box, f, c, withT, app) {
   const availIds = new Set(allPool.filter(isPlayerAvail).map(p => p.id));
   const availGkTotal = allPool.filter(p => availIds.has(p.id) && clientPlayerPositions(p).includes('ВР')).length;
 
-  const initH = f.homeLineup || f.autoHome || { formation: '4-3-3', starters: [], bench: [], roles: {}, plannedSubs: [], slots: [], speech: '', training: '' };
-  const initA = f.awayLineup || f.autoAway || { formation: '4-3-3', starters: [], bench: [], roles: {}, plannedSubs: [], slots: [], speech: '', training: '' };
+  const initH = f.homeLineup || f.autoHome || { formation: '4-3-3', starters: [], bench: [], roles: {}, plannedSubs: [], slots: [], tactics: '', speech: '', training: '' };
+  const initA = f.awayLineup || f.autoAway || { formation: '4-3-3', starters: [], bench: [], roles: {}, plannedSubs: [], slots: [], tactics: '', speech: '', training: '' };
 
   const assign = {};
   allPool.forEach(p => { assign[p.id] = 'none'; });
@@ -12227,6 +12267,7 @@ function intraLineupForm(box, f, c, withT, app) {
       slots: Array.isArray(initH.slots) ? initH.slots.map(x => ({ ...x })) : [],
       roles: { ...(initH.roles || {}) },
       plannedSubs: Array.isArray(initH.plannedSubs) ? initH.plannedSubs.map(x => ({ ...x })) : [],
+      tactics: initH.tactics || '',
       speech: initH.speech || '',
       training: initH.training || ''
     },
@@ -12236,6 +12277,7 @@ function intraLineupForm(box, f, c, withT, app) {
       slots: Array.isArray(initA.slots) ? initA.slots.map(x => ({ ...x })) : [],
       roles: { ...(initA.roles || {}) },
       plannedSubs: Array.isArray(initA.plannedSubs) ? initA.plannedSubs.map(x => ({ ...x })) : [],
+      tactics: initA.tactics || '',
       speech: initA.speech || '',
       training: initA.training || ''
     }
@@ -12297,10 +12339,12 @@ function intraLineupForm(box, f, c, withT, app) {
           </select>
           <button type="button" class="btn sm alt" id="intra_apply_preset">Подставить</button>
         </div>` : ''}
-        <div class="row sp" style="align-items:center;margin-top:10px"><label class="small" style="margin:0;font-weight:600">Предматчевая установка команде</label><button type="button" class="btn sm alt" id="intra_clear_sp">Очистить</button></div>
-        <textarea id="intra_sp" rows="2" maxlength="20000" style="width:100%;margin-top:4px" placeholder="Короткие тактические указания для выбранной половины команды"></textarea>
-        <div class="row sp" style="align-items:center;margin-top:8px"><label class="small" style="margin:0;font-weight:600">План тренировок / акценты спарринга</label><button type="button" class="btn sm alt" id="intra_clear_tr">Очистить</button></div>
-        <textarea id="intra_tr" rows="2" maxlength="10000" style="width:100%;margin-top:4px" placeholder="Например: отработка прессинга и стандартов"></textarea>
+        <div class="row sp" style="align-items:center;margin-top:10px"><label class="small" style="margin:0;font-weight:600">Тактика выбранной команды</label><div class="row" style="gap:8px;align-items:center"><span class="small muted" id="intra_tc_cnt">0 / 10 000</span><button type="button" class="btn sm alt" id="intra_clear_tc">Очистить</button></div></div>
+        <textarea id="intra_tc" rows="2" maxlength="10000" style="width:100%;margin-top:4px" placeholder="Тактические указания на спарринг для выбранной команды"></textarea>
+        <div class="row sp" style="align-items:center;margin-top:8px"><label class="small" style="margin:0;font-weight:600">Речь тренера команде</label><div class="row" style="gap:8px;align-items:center"><span class="small muted" id="intra_sp_cnt">0 / 10 000</span><button type="button" class="btn sm alt" id="intra_clear_sp">Очистить</button></div></div>
+        <textarea id="intra_sp" rows="2" maxlength="10000" style="width:100%;margin-top:4px" placeholder="Обращение и настрой тренера в раздевалке"></textarea>
+        <div class="row sp" style="align-items:center;margin-top:8px"><label class="small" style="margin:0;font-weight:600">План тренировок / акценты спарринга</label><div class="row" style="gap:8px;align-items:center"><span class="small muted" id="intra_tr_cnt">0 / 7 000</span><button type="button" class="btn sm alt" id="intra_clear_tr">Очистить</button></div></div>
+        <textarea id="intra_tr" rows="2" maxlength="7000" style="width:100%;margin-top:4px" placeholder="Например: отработка прессинга и стандартов"></textarea>
         <div id="intra_preview_widget" style="margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--soft);border:1px solid var(--border);font-size:12.5px"></div>
       </div>
 
@@ -12383,7 +12427,7 @@ function intraLineupForm(box, f, c, withT, app) {
       const { sPids: starters } = getSidePids(activeSide);
       const slotsPayload = stSide.slots.length === 11 && starters.length === 11 ? stSide.slots : undefined;
       try {
-        const res = await api('/club/tactics/preview', withT({ fid: f.id, starters, speech: stSide.speech, training: stSide.training, formation: stSide.formation, slots: slotsPayload }));
+        const res = await api('/club/tactics/preview', withT({ fid: f.id, starters, tactics: stSide.tactics, speech: stSide.speech, training: stSide.training, formation: stSide.formation, slots: slotsPayload }));
         if (!res || !res.ok) return;
         const slotEntries = Array.isArray(res.slots) ? res.slots : [];
         const forcedSlots = slotEntries.filter(x => x.fit && (x.fit.severity === 'forced' || x.fit.severity === 'critical'));
@@ -12406,12 +12450,23 @@ function intraLineupForm(box, f, c, withT, app) {
     box.querySelectorAll('#intra_side_tabs [data-iside]').forEach(btn => {
       btn.classList.toggle('on', btn.dataset.iside === activeSide);
     });
+    const syncIntraCounts = () => {
+      const tcCnt = box.querySelector('#intra_tc_cnt');
+      const spCnt = box.querySelector('#intra_sp_cnt');
+      const trCnt = box.querySelector('#intra_tr_cnt');
+      if (tcCnt) tcCnt.textContent = `${String(stSide.tactics || '').length.toLocaleString('ru-RU')} / 10 000`;
+      if (spCnt) spCnt.textContent = `${String(stSide.speech || '').length.toLocaleString('ru-RU')} / 10 000`;
+      if (trCnt) trCnt.textContent = `${String(stSide.training || '').length.toLocaleString('ru-RU')} / 7 000`;
+    };
     const fmInp = box.querySelector('#intra_fm');
     if (fmInp) fmInp.value = stSide.formation;
+    const tcInp = box.querySelector('#intra_tc');
+    if (tcInp) tcInp.value = stSide.tactics;
     const spInp = box.querySelector('#intra_sp');
     if (spInp) spInp.value = stSide.speech;
     const trInp = box.querySelector('#intra_tr');
     if (trInp) trInp.value = stSide.training;
+    syncIntraCounts();
 
     // Slots editor
     const slotsWrap = box.querySelector('#intra_slots_editor');
@@ -12566,16 +12621,36 @@ function intraLineupForm(box, f, c, withT, app) {
       renderTacticsPane();
     }
   });
-  box.querySelector('#intra_sp')?.addEventListener('input', ev => { sideState[activeSide].speech = ev.target.value; });
-  box.querySelector('#intra_tr')?.addEventListener('input', ev => { sideState[activeSide].training = ev.target.value; });
+  box.querySelector('#intra_tc')?.addEventListener('input', ev => {
+    const val = String(ev.target.value || '').slice(0, 10000);
+    if (ev.target.value !== val) ev.target.value = val;
+    sideState[activeSide].tactics = val;
+    const cnt = box.querySelector('#intra_tc_cnt');
+    if (cnt) cnt.textContent = `${val.length.toLocaleString('ru-RU')} / 10 000`;
+  });
+  box.querySelector('#intra_sp')?.addEventListener('input', ev => {
+    const val = String(ev.target.value || '').slice(0, 10000);
+    if (ev.target.value !== val) ev.target.value = val;
+    sideState[activeSide].speech = val;
+    const cnt = box.querySelector('#intra_sp_cnt');
+    if (cnt) cnt.textContent = `${val.length.toLocaleString('ru-RU')} / 10 000`;
+  });
+  box.querySelector('#intra_tr')?.addEventListener('input', ev => {
+    const val = String(ev.target.value || '').slice(0, 7000);
+    if (ev.target.value !== val) ev.target.value = val;
+    sideState[activeSide].training = val;
+    const cnt = box.querySelector('#intra_tr_cnt');
+    if (cnt) cnt.textContent = `${val.length.toLocaleString('ru-RU')} / 7 000`;
+  });
   box.querySelector('#intra_apply_preset')?.addEventListener('click', () => {
     const sel = box.querySelector('#intra_preset_sel');
     const idx = sel && sel.value !== '' ? Number(sel.value) : -1;
     const pr = presets[idx];
     if (!pr) return toast('Выберите тактику из списка', 1);
     const stSide = sideState[activeSide];
-    stSide.speech = pr.speech || '';
-    stSide.training = pr.training || '';
+    stSide.tactics = String(pr.tactics || '').slice(0, 10000);
+    stSide.speech = String(pr.speech || '').slice(0, 10000);
+    stSide.training = String(pr.training || '').slice(0, 7000);
     if (pr.formation && isCompleteFormation(pr.formation)) {
       const nextFm = String(pr.formation).trim();
       if (nextFm !== stSide.lastValidFm) {
@@ -12587,13 +12662,23 @@ function intraLineupForm(box, f, c, withT, app) {
     renderTacticsPane();
     toast('Тактика подставлена для выбранной команды — сохраните составы');
   });
+  box.querySelector('#intra_clear_tc')?.addEventListener('click', () => {
+    sideState[activeSide].tactics = '';
+    if (box.querySelector('#intra_tc')) box.querySelector('#intra_tc').value = '';
+    const cnt = box.querySelector('#intra_tc_cnt');
+    if (cnt) cnt.textContent = '0 / 10 000';
+  });
   box.querySelector('#intra_clear_sp')?.addEventListener('click', () => {
     sideState[activeSide].speech = '';
     if (box.querySelector('#intra_sp')) box.querySelector('#intra_sp').value = '';
+    const cnt = box.querySelector('#intra_sp_cnt');
+    if (cnt) cnt.textContent = '0 / 10 000';
   });
   box.querySelector('#intra_clear_tr')?.addEventListener('click', () => {
     sideState[activeSide].training = '';
     if (box.querySelector('#intra_tr')) box.querySelector('#intra_tr').value = '';
+    const cnt = box.querySelector('#intra_tr_cnt');
+    if (cnt) cnt.textContent = '0 / 7 000';
   });
   box.querySelector('#intra_auto_btn')?.addEventListener('click', () => {
     seedAssignments(f.autoHome, f.autoAway);
@@ -12632,8 +12717,9 @@ function intraLineupForm(box, f, c, withT, app) {
         slots: slotsPayload.length === 11 ? slotsPayload : undefined,
         roles: stSide.roles,
         plannedSubs: stSide.plannedSubs,
-        speech: stSide.speech,
-        training: stSide.training
+        tactics: String(stSide.tactics || '').slice(0, 10000),
+        speech: String(stSide.speech || '').slice(0, 10000),
+        training: String(stSide.training || '').slice(0, 7000)
       };
     };
     const r = await act(() => api('/club/lineup', withT({
@@ -13059,7 +13145,7 @@ async function pgAdmin(app) {
     });
     ab.querySelectorAll('[data-lu]').forEach(b => b.onclick = async () => {
       const l = await api('/admin/lineups/' + b.dataset.lu);
-      modal(['home', 'away'].map(s => `<div class="row" style="gap:10px">${l[s].logo ? `<img class="t-logo md" src="${l[s].logo}" alt=""/>` : ''}<h3 style="margin:0">${e(l[s].team)} · ${e(l[s].formation)} ${l[s].submitted ? '' : '<span class="tag">авто</span>'}</h3></div><p class="small"><b>Старт:</b> ${e(l[s].starters.join(', '))}<br><b>Скамейка:</b> ${e(l[s].bench.join(', '))}${l[s].roleSummary?.length ? `<br><b>Стандарты/капитан:</b> ${e(l[s].roleSummary.join('; '))}` : ''}${l[s].plannedSubsSummary?.length ? `<br><b>Плановые замены:</b> ${e(l[s].plannedSubsSummary.join('; '))}` : ''}${l[s].slotMismatches?.length ? `<br><span style="color:#b45309"><b>Перестановки в схеме:</b> ${e(l[s].slotMismatches.join('; '))}</span>` : ''}</p><div class="qa small">Речь: ${e(l[s].speech || '(молчание)')}\nТренировки: ${e(l[s].training || '—')}</div>`).join('<hr>'));
+      modal(['home', 'away'].map(s => `<div class="row" style="gap:10px">${l[s].logo ? `<img class="t-logo md" src="${l[s].logo}" alt=""/>` : ''}<h3 style="margin:0">${e(l[s].team)} · ${e(l[s].formation)} ${l[s].submitted ? '' : '<span class="tag">авто</span>'}</h3></div><p class="small"><b>Старт:</b> ${e(l[s].starters.join(', '))}<br><b>Скамейка:</b> ${e(l[s].bench.join(', '))}${l[s].roleSummary?.length ? `<br><b>Стандарты/капитан:</b> ${e(l[s].roleSummary.join('; '))}` : ''}${l[s].plannedSubsSummary?.length ? `<br><b>Плановые замены:</b> ${e(l[s].plannedSubsSummary.join('; '))}` : ''}${l[s].slotMismatches?.length ? `<br><span style="color:#b45309"><b>Перестановки в схеме:</b> ${e(l[s].slotMismatches.join('; '))}</span>` : ''}</p><div class="qa small">Тактика: ${e(l[s].tactics || '—')}\nРечь тренера: ${e(l[s].speech || '(молчание)')}\nТренировки: ${e(l[s].training || '—')}</div>`).join('<hr>'));
     });
     ab.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => {
       window.openMatchScheduleModal(b.dataset.ed, () => re());
