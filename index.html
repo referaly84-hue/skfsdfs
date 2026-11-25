@@ -17964,6 +17964,49 @@ async function pgAdmin(app) {
 let NT_TAB = 'current';
 let NT_TEAM = 'main';
 let NT_VIEW_STAGE = null;
+let NT_SORT = 'pos';
+let NT_SORT_DIR = 'asc';
+const NT_POS_ORDER = {
+  ВР: 0,
+  ЛЗ: 1, ЛФЗ: 2, ЦЗ: 3, ПЗ: 4, ПФЗ: 5,
+  ОП: 6, ЛП: 7, ЦП: 8, ПП: 9, АП: 10,
+  ЛВ: 11, ЦФ: 12, СТ: 13, ПВ: 14
+};
+function sortNationalList(list, sortKey = NT_SORT, sortDir = NT_SORT_DIR) {
+  const dir = sortDir === 'desc' ? -1 : 1;
+  const posIdx = (p) => NT_POS_ORDER[String(p?.pos || '')] ?? 99;
+  const clubStr = (p) => String(p?.teamName || p?.abroadClub || (p?.teamId ? teamName(p.teamId) : '') || '');
+  const ageVal = (p) => (p?.age != null ? Number(p.age) : 99);
+  const nameStr = (p) => String(p?.name || '');
+  return [...(list || [])].sort((a, b) => {
+    if (sortKey === 'club') {
+      const c = clubStr(a).localeCompare(clubStr(b), 'ru') * dir;
+      if (c !== 0) return c;
+      if (posIdx(a) !== posIdx(b)) return posIdx(a) - posIdx(b);
+      if (ageVal(a) !== ageVal(b)) return ageVal(a) - ageVal(b);
+      return nameStr(a).localeCompare(nameStr(b), 'ru');
+    }
+    if (sortKey === 'age') {
+      const av = ageVal(a), bv = ageVal(b);
+      if (av !== bv) return (av - bv) * dir;
+      if (posIdx(a) !== posIdx(b)) return posIdx(a) - posIdx(b);
+      const c = clubStr(a).localeCompare(clubStr(b), 'ru');
+      if (c !== 0) return c;
+      return nameStr(a).localeCompare(nameStr(b), 'ru');
+    }
+    if (sortKey === 'matches' || sortKey === 'goals' || sortKey === 'assists' || sortKey === 'rating') {
+      const val = (p) => sortKey === 'rating' ? Number(p?.avgRating || p?.rating || 0) : Number(p?.[sortKey] || 0);
+      const d = (val(a) - val(b)) * dir;
+      if (d !== 0) return d;
+    }
+    const pCmp = (posIdx(a) - posIdx(b)) * (sortKey === 'pos' ? dir : 1);
+    if (pCmp !== 0) return pCmp;
+    const cCmp = clubStr(a).localeCompare(clubStr(b), 'ru');
+    if (cCmp !== 0) return cCmp;
+    if (ageVal(a) !== ageVal(b)) return ageVal(a) - ageVal(b);
+    return nameStr(a).localeCompare(nameStr(b), 'ru');
+  });
+}
 async function pgNational(app, subTeam) {
   if ((subTeam === 'u21' || subTeam === 'main') && NT_TEAM !== subTeam) {
     NT_TEAM = subTeam;
@@ -17980,27 +18023,31 @@ async function pgNational(app, subTeam) {
   ]);
   const cur = data.current || { title: isU21 ? 'Ближайшая пауза молодёжной сборной U21' : 'Ближайшая пауза на матчи сборных', stage: 'extended', extendedPlayers: [], finalPlayers: [], matches: [] };
   const archive = data.archive || [];
-  const allPlayers = Array.isArray(plData) ? plData : (plData?.players || []);
+  const allPlayers = sortNationalList(Array.isArray(plData) ? plData : (plData?.players || []), 'pos', 'asc');
   const activeStage = (NT_VIEW_STAGE === 'extended' || NT_VIEW_STAGE === 'final')
     ? NT_VIEW_STAGE
     : (cur.stage === 'final' ? 'final' : 'extended');
   const activeList = activeStage === 'final' ? (cur.finalPlayers || []) : (cur.extendedPlayers || []);
 
-  const renderPlayersTable = (list, canEdit, showReasons = false) => {
+  const sortArrow = (k) => NT_SORT === k ? (NT_SORT_DIR === 'desc' ? ' ▼' : ' ▲') : '';
+  const thSort = (k, label, alignLeft = false) =>
+    `<th class="${alignLeft ? 'l' : ''}" data-nt-sort="${k}" style="cursor:pointer;user-select:none;white-space:nowrap" title="Сортировать">${label}${sortArrow(k)}</th>`;
+
+  const renderPlayersTable = (list, canEdit, showReasons = false, interactiveSort = true) => {
     if (!list.length) {
       return `<div class="empty">${activeStage === 'final' ? 'Итоговый список (кого вызвали) ещё не сформирован.' : 'Расширенный состав на ближайшую паузу ещё не опубликован.'}</div>`;
     }
+    const sortedList = sortNationalList(list, NT_SORT, NT_SORT_DIR);
     return `<div class="scroll-hint"><span>👉 Прокручивайте состав вправо</span></div><div class="wrap"><table class="nt-table">
-      <thead><tr><th>№</th><th class="l">Игрок</th><th>Поз.</th><th>Возр.</th><th class="l">Клуб</th>${showReasons ? '<th class="l nt-reason">Почему вызван</th>' : ''}<th>OVR</th><th>Матчи</th><th>Голы</th><th>Пасы</th><th>Оценка</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+      <thead><tr><th>№</th><th class="l">Игрок</th>${interactiveSort ? thSort('pos', 'Поз.') : '<th>Поз.</th>'}${interactiveSort ? thSort('age', 'Возр.') : '<th>Возр.</th>'}${interactiveSort ? thSort('club', 'Клуб', true) : '<th class="l">Клуб</th>'}${showReasons ? '<th class="l nt-reason">Почему вызван</th>' : ''}${interactiveSort ? thSort('matches', 'Матчи') : '<th>Матчи</th>'}${interactiveSort ? thSort('goals', 'Голы') : '<th>Голы</th>'}${interactiveSort ? thSort('assists', 'Пасы') : '<th>Пасы</th>'}${interactiveSort ? thSort('rating', 'Оценка') : '<th>Оценка</th>'}${canEdit ? '<th></th>' : ''}</tr></thead>
       <tbody>
-        ${list.map((p, i) => `<tr>
-          <td><b>${p.number || p.num || (i + 1)}</b></td>
+        ${sortedList.map((p, i) => `<tr>
+          <td><b>${i + 1}</b></td>
           <td class="l"><b>${e(p.name)}</b>${p.isAbroad ? ' <span class="tag sm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-size:10.5px">🌍 Легионер</span>' : ''}</td>
           <td><span class="tag">${e(p.pos)}</span></td>
           <td class="small muted">${p.age != null ? `${p.age} л.` : '—'}</td>
           <td class="l"><div class="t-cell">${p.teamLogo ? `<img class="t-logo" src="${p.teamLogo}" alt=""/>` : ''}<span>${e(p.teamName)}${p.isAbroad && p.abroadCountry && !String(p.teamName || '').includes(p.abroadCountry) ? ` <span class="muted small">(${e(p.abroadCountry)})</span>` : ''}</span></div></td>
           ${showReasons ? `<td class="l small nt-reason" style="max-width:280px;color:#334155;line-height:1.35">${e(p.callupReason || '—')}</td>` : ''}
-          <td><b>${p.ovr || 70}</b></td>
           <td>${p.matches || 0}</td>
           <td>${p.goals || 0}</td>
           <td>${p.assists || 0}</td>
@@ -18068,7 +18115,15 @@ async function pgNational(app, subTeam) {
             <button class="btn ${activeStage === 'final' ? '' : 'alt'} sm" data-nt-stage="final">Кого вызвали (${(cur.finalPlayers || []).length})</button>
           </div>
         </div>
-        ${renderPlayersTable(activeList, isAdmin, activeStage === 'final')}
+        ${activeList.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+          <span class="small muted">Сортировка:</span>
+          <button class="btn ${NT_SORT === 'pos' ? '' : 'alt'} sm" data-nt-sort-btn="pos">По позиции${NT_SORT === 'pos' ? sortArrow('pos') : ''}</button>
+          <button class="btn ${NT_SORT === 'club' ? '' : 'alt'} sm" data-nt-sort-btn="club">По клубу${NT_SORT === 'club' ? sortArrow('club') : ''}</button>
+          <button class="btn ${NT_SORT === 'age' ? '' : 'alt'} sm" data-nt-sort-btn="age">По возрасту${NT_SORT === 'age' ? sortArrow('age') : ''}</button>
+          <button class="btn ${NT_SORT === 'goals' ? '' : 'alt'} sm" data-nt-sort-btn="goals">По голам${NT_SORT === 'goals' ? sortArrow('goals') : ''}</button>
+          <button class="btn ${NT_SORT === 'rating' ? '' : 'alt'} sm" data-nt-sort-btn="rating">По оценке${NT_SORT === 'rating' ? sortArrow('rating') : ''}</button>
+        </div>` : ''}
+        <div id="nt_squad_table_wrap">${renderPlayersTable(activeList, isAdmin, activeStage === 'final', true)}</div>
       </div>
 
       <div class="panel">
@@ -18087,7 +18142,7 @@ async function pgNational(app, subTeam) {
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
           <select id="nt_add_pid" style="flex:1;min-width:240px">
-            ${allPlayers.slice(0, 600).map(p => `<option value="${p.id}">${p.abroadClub ? '🌍 ' : ''}${e(p.name)} (${p.pos}${p.age != null ? ', ' + p.age + ' л.' : ''}, ${e(p.abroadClub ? `${p.abroadClub}${p.abroadCountry ? ' · ' + p.abroadCountry : ''}` : teamName(p.teamId))}${p.ovr ? ', OVR ' + p.ovr : ''}${p.matches > 0 ? `, ${p.matches}м ${p.goals || 0}+${p.assists || 0}` : ''})</option>`).join('')}
+            ${allPlayers.slice(0, 600).map(p => `<option value="${p.id}">${p.abroadClub ? '🌍 ' : ''}[${e(p.pos)}] ${e(p.name)} — ${e(p.abroadClub ? `${p.abroadClub}${p.abroadCountry ? ' · ' + p.abroadCountry : ''}` : teamName(p.teamId))}${p.age != null ? ', ' + p.age + ' л.' : ''}${p.matches > 0 ? `, ${p.matches}м ${p.goals || 0}+${p.assists || 0}` : ''}</option>`).join('')}
           </select>
           <button class="btn alt" id="nt_add_btn">Добавить в ${activeStage === 'final' ? 'кого вызвали' : 'расширенный состав'}</button>
         </div>
@@ -18114,7 +18169,7 @@ async function pgNational(app, subTeam) {
           <span class="small muted">Архив · ${e(a.archivedAt || '')} · Игроков: ${list.length}</span>
         </div>
         ${renderMatches(a.matches)}
-        <div style="margin-top:10px">${renderPlayersTable(list, false, hasFinal)}</div>
+        <div style="margin-top:10px">${renderPlayersTable(list, false, hasFinal, false)}</div>
       </div>`;
     }).join('') : '<div class="panel"><div class="empty">Архив сборов пуст.</div></div>';
   }
@@ -18144,6 +18199,39 @@ async function pgNational(app, subTeam) {
     ensureExt().then(ext => ext.renderNationalProposalsSection($('#nt_proposals_mount'), { ...cur, adQuota: data.adQuota }, isAdmin, () => pgNational(app), NT_TEAM));
   }
 
+  const bindSquadTable = () => {
+    app.querySelectorAll('#nt_squad_table_wrap [data-nt-sort]').forEach(el => {
+      el.onclick = () => applySort(el.dataset.ntSort);
+    });
+    app.querySelectorAll('#nt_squad_table_wrap [data-nt-rem]').forEach(b => {
+      b.onclick = async () => {
+        await act(() => api('/admin/national/squad', { team: NT_TEAM, action: 'remove', stage: activeStage, pid: b.dataset.ntRem }), 'Игрок убран из списка');
+        pgNational(app);
+      };
+    });
+  };
+  const applySort = (key) => {
+    if (NT_SORT === key) {
+      NT_SORT_DIR = NT_SORT_DIR === 'asc' ? 'desc' : 'asc';
+    } else {
+      NT_SORT = key;
+      NT_SORT_DIR = (key === 'matches' || key === 'goals' || key === 'assists' || key === 'rating') ? 'desc' : 'asc';
+    }
+    const wrap = $('#nt_squad_table_wrap');
+    if (wrap) wrap.innerHTML = renderPlayersTable(activeList, isAdmin, activeStage === 'final', true);
+    const sortLabels = { pos: 'По позиции', club: 'По клубу', age: 'По возрасту', goals: 'По голам', rating: 'По оценке' };
+    app.querySelectorAll('[data-nt-sort-btn]').forEach(btn => {
+      const k = btn.dataset.ntSortBtn;
+      btn.className = `btn ${NT_SORT === k ? '' : 'alt'} sm`;
+      btn.textContent = (sortLabels[k] || k) + (NT_SORT === k ? sortArrow(k) : '');
+    });
+    bindSquadTable();
+  };
+  app.querySelectorAll('[data-nt-sort-btn]').forEach(el => {
+    el.onclick = () => applySort(el.dataset.ntSortBtn);
+  });
+  bindSquadTable();
+
   app.querySelectorAll('[data-nt-team]').forEach(b => b.onclick = () => {
     const next = b.dataset.ntTeam === 'u21' ? 'u21' : 'main';
     if (NT_TEAM === next) return;
@@ -18160,10 +18248,6 @@ async function pgNational(app, subTeam) {
     if (isAdmin) {
       await act(() => api('/admin/national/squad', { team: NT_TEAM, action: 'stage', stage: nextStage }));
     }
-    pgNational(app);
-  });
-  app.querySelectorAll('[data-nt-rem]').forEach(b => b.onclick = async () => {
-    await act(() => api('/admin/national/squad', { team: NT_TEAM, action: 'remove', stage: activeStage, pid: b.dataset.ntRem }), 'Игрок убран из списка');
     pgNational(app);
   });
   if ($('#nt_gen_ext')) $('#nt_gen_ext').onclick = async () => {

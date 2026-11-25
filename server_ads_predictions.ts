@@ -3368,9 +3368,23 @@ export function getNationalProposals(ntCurrent: any) {
 }
 
 /**
- * Applies real season stats, OVR, league tier, and fan/club proposal vote priority
- * to the national team candidate pool:
- * - Distinguishes player skill OVR (30..99) from match average rating (4.0..10.0).
+ * Parses lightweight match & contribution counts from a player's `stats2y` string
+ * (e.g. "34 матчей, 6 результативных действий" or "30 матчей, 10 сухих матчей").
+ */
+function parseStats2yNums(stats2yRaw: any): { matches2y: number; actions2y: number } {
+  const s = String(stats2yRaw || '').toLowerCase();
+  if (!s) return { matches2y: 0, actions2y: 0 };
+  const mMatch = s.match(/(\d+)\s*матч/);
+  const aMatch = s.match(/(\d+)\s*(?:результатив|сух|гол|очк)/);
+  return {
+    matches2y: mMatch ? Math.min(100, Number(mMatch[1]) || 0) : 0,
+    actions2y: aMatch ? Math.min(60, Number(aMatch[1]) || 0) : 0,
+  };
+}
+
+/**
+ * Applies real season stats, match rating, league tier, 2-year background, and
+ * fan/club proposal vote priority to the national team candidate pool (without OVR):
  * - Prioritizes top-tier domestic (RPL) and abroad legionnaires over lower/media tiers.
  * - Good-form players receive a bounded tie-breaker bonus proportional to votes
  *   so 4 votes beats 1 vote when both played well.
@@ -3383,7 +3397,6 @@ export function scoreNationalCandidateWithVotes(
   opts?: {
     isAbroad?: boolean;
     leagueComp?: string | null;
-    ovr?: number;
     avgRating?: number;
     matches?: number;
     goals?: number;
@@ -3392,18 +3405,14 @@ export function scoreNationalCandidateWithVotes(
     saves?: number;
     cleanSheets?: number;
     tackles?: number;
+    stats2y?: string;
+    isRegistered?: boolean;
   }
 ): number {
-  const rawRating = Number(p?.rating || 0);
-  const ovr = Number(
-    opts?.ovr ??
-      (Number.isFinite(Number(p?.ovr)) && Number(p.ovr) >= 25 ? Number(p.ovr) : 0) ??
-      0
-  ) || (rawRating >= 25 ? rawRating : 70);
   const avgRating = Number(
     opts?.avgRating ??
       p?.avgRating ??
-      (rawRating > 0 && rawRating <= 10.5 ? rawRating : 0)
+      (Number(p?.rating) > 0 && Number(p?.rating) <= 10.5 ? Number(p.rating) : 0)
   );
   const matches = Number(opts?.matches ?? p?.matches ?? 0);
   const goals = Number(opts?.goals ?? p?.goals ?? 0);
@@ -3425,33 +3434,39 @@ export function scoreNationalCandidateWithVotes(
 
   let tierBonus = 0;
   if (abroad) {
-    // Легионеры за границей не имеют матчей в статистике РПЛ, но должны иметь высокий приоритет
-    tierBonus = 68 + Math.max(0, ovr - 65) * 2.4;
+    // Легионеры за границей не имеют матчей в статистике РПЛ, но имеют высокий приоритет
+    tierBonus = 75;
   } else if (comp === 'rpl') {
-    tierBonus = 38;
+    tierBonus = 45;
   } else if (comp === 'fnl') {
-    tierBonus = 16;
-  } else if (comp === '2la_gold' || comp === '2la_silver') {
+    tierBonus = 20;
+  } else if (comp === '2la_gold') {
+    tierBonus = 8;
+  } else if (comp === '2la_silver') {
     tierBonus = 5;
   } else if (comp.startsWith('2lb')) {
     tierBonus = 0;
   } else if (comp.startsWith('media')) {
     tierBonus = -20;
   } else if (!p?.teamId) {
-    tierBonus = -8;
+    tierBonus = -10;
   }
 
-  let baseScore = tierBonus + (ovr - 60) * 2.2;
+  const { matches2y, actions2y } = parseStats2yNums(opts?.stats2y ?? p?.stats2y);
+  const bgBonus = Math.min(18, matches2y * 0.18 + actions2y * 0.35);
+  const regBonus = opts?.isRegistered ? 4 : 0;
+
+  let baseScore = tierBonus + bgBonus + regBonus;
   if (matches > 0) {
-    baseScore += Math.min(matches, 15) * 1.6 + Math.min(minutes / 90, 15) * 0.7;
+    baseScore += Math.min(matches, 15) * 2.0 + Math.min(minutes / 90, 15) * 1.2;
     if (avgRating > 0) {
-      baseScore += (avgRating - 6.3) * 12;
+      baseScore += (avgRating - 6.3) * 14;
     }
-    baseScore += goals * 3.8 + assists * 2.6;
+    baseScore += goals * 4.5 + assists * 3.0;
     if (isGk) {
-      baseScore += saves * 0.55 + cleanSheets * 4.0;
+      baseScore += saves * 0.7 + cleanSheets * 4.5;
     } else {
-      baseScore += tackles * 0.35 + cleanSheets * 1.2;
+      baseScore += tackles * 0.45 + cleanSheets * 1.5;
     }
   }
 

@@ -24537,22 +24537,24 @@ app.get("/api/admin/players", admin, (req, res) => {
   if (q2) l = l.filter((p) => norm(p.name).includes(q2) || norm(p.abroadClub || "").includes(q2) || norm(p.abroadCountry || "").includes(q2));
   const limit = Math.min(2000, Math.max(50, Number(req.query.limit) || (eligible ? 1500 : 300)));
   if (eligible) {
-    const emptyVotes = new Map<string, number>();
     l = [...l].sort((a, b) => {
-      const sa = getPlayerNationalStats(a);
-      const sb = getPlayerNationalStats(b);
-      return (
-        scoreNationalCandidateWithVotes(b, emptyVotes, sb) -
-          scoreNationalCandidateWithVotes(a, emptyVotes, sa) ||
-        String(a.name || "").localeCompare(String(b.name || ""), "ru")
-      );
+      const pa = NATIONAL_POS_ORDER[String(a.pos || "")] ?? 99;
+      const pb = NATIONAL_POS_ORDER[String(b.pos || "")] ?? 99;
+      if (pa !== pb) return pa - pb;
+      const ca = nationalPlayerClubLabel(a);
+      const cb = nationalPlayerClubLabel(b);
+      const cmpC = ca.localeCompare(cb, "ru");
+      if (cmpC !== 0) return cmpC;
+      const aa = ageOfPlayer(a) ?? 99;
+      const ab = ageOfPlayer(b) ?? 99;
+      if (aa !== ab) return aa - ab;
+      return String(a.name || "").localeCompare(String(b.name || ""), "ru");
     });
   }
   res.json(l.slice(0, limit).map((p) => {
     const out: any = pubPlayer(p);
     if (eligible) {
       const st = getPlayerNationalStats(p);
-      out.ovr = st.ovr;
       out.matches = st.matches;
       out.goals = st.goals;
       out.assists = st.assists;
@@ -28409,10 +28411,28 @@ function getNationalPlayerSeasonStatsMap(): Map<string, any> {
   _natStatsMemo = { key, map };
   return map;
 }
+const NATIONAL_POS_ORDER: Record<string, number> = {
+  ВР: 0,
+  ЛЗ: 1, ЛФЗ: 2, ЦЗ: 3, ПЗ: 4, ПФЗ: 5,
+  ОП: 6, ЛП: 7, ЦП: 8, ПП: 9, АП: 10,
+  ЛВ: 11, ЦФ: 12, СТ: 13, ПВ: 14
+};
+function compareNationalPlayersPosClubAge(a: any, b: any): number {
+  const pa = NATIONAL_POS_ORDER[String(a?.pos || "")] ?? 99;
+  const pb = NATIONAL_POS_ORDER[String(b?.pos || "")] ?? 99;
+  if (pa !== pb) return pa - pb;
+  const ca = String(a?.teamName || a?.clubLabel || "");
+  const cb = String(b?.teamName || b?.clubLabel || "");
+  const cmpClub = ca.localeCompare(cb, "ru");
+  if (cmpClub !== 0) return cmpClub;
+  const aa = a?.age != null ? Number(a.age) : 99;
+  const ab = b?.age != null ? Number(b.age) : 99;
+  if (aa !== ab) return aa - ab;
+  return String(a?.name || "").localeCompare(String(b?.name || ""), "ru");
+}
 function getPlayerNationalStats(p: any) {
   if (!p) {
     return {
-      ovr: 70,
       matches: 0,
       minutes: 0,
       goals: 0,
@@ -28424,7 +28444,9 @@ function getPlayerNationalStats(p: any) {
       isAbroad: false,
       leagueComp: null as string | null,
       leagueName: "—",
-      clubLabel: "—"
+      clubLabel: "—",
+      stats2y: "",
+      isRegistered: false
     };
   }
   const stMap = getNationalPlayerSeasonStatsMap();
@@ -28435,11 +28457,7 @@ function getPlayerNationalStats(p: any) {
   const leagueName = tObj?.comp
     ? (compOf(tObj.comp)?.name || tObj.comp)
     : (abroad ? "Зарубежный клуб" : "Свободный агент");
-  const rawOvr = Number(p.ovr);
   const rawRating = Number(p.rating);
-  const ovr = (Number.isFinite(rawOvr) && rawOvr >= 25 && rawOvr <= 99)
-    ? Math.round(rawOvr)
-    : ((Number.isFinite(rawRating) && rawRating >= 25 && rawRating <= 99) ? Math.round(rawRating) : 70);
 
   const hasSim = Boolean(s && s.matches > 0);
   const matches = hasSim ? s.matches : Number(p.matches || 0);
@@ -28454,7 +28472,6 @@ function getPlayerNationalStats(p: any) {
     : ((Number.isFinite(rawRating) && rawRating > 0 && rawRating <= 10.5) ? +rawRating.toFixed(2) : 0);
 
   return {
-    ovr,
     matches,
     minutes,
     goals,
@@ -28466,7 +28483,9 @@ function getPlayerNationalStats(p: any) {
     isAbroad: abroad,
     leagueComp,
     leagueName,
-    clubLabel: nationalPlayerClubLabel(p)
+    clubLabel: nationalPlayerClubLabel(p),
+    stats2y: String(p.stats2y || ""),
+    isRegistered: Boolean(p.teamId && Array.isArray(db.squads?.[p.teamId]) && db.squads[p.teamId].includes(p.id))
   };
 }
 function normalizeNationalTeamType(raw?: any): "main" | "u21" {
@@ -28497,16 +28516,16 @@ function buildNationalCallupReasonFallback(p: any, teamType: "main" | "u21" = "m
   const matches = Number(st.matches || 0);
   const avgRating = Number(st.avgRating || 0);
   const saves = Number(st.saves || 0);
-  const ovr = Number(st.ovr || 70);
   const pos = String(p.pos || "ЦП");
   const ratStr = avgRating > 0 ? `, ср. оц. ${avgRating.toFixed(2)}` : "";
+  const bgShort = st.stats2y ? ` (${String(st.stats2y).slice(0, 48)})` : "";
   if (isAbroad) {
-    return `Легионер в «${clubLbl}» (OVR ${ovr}): высокая ценность за зарубежный опыт.`;
+    return `Легионер в «${clubLbl}»: высокая ценность за зарубежный опыт.`;
   }
   if (pos === "ВР") {
     return matches > 0
       ? `Надёжная игра в воротах «${clubLbl}» (${matches} м., ${saves} сейвов${ratStr}).`
-      : `Высокий класс вратаря в обойме «${clubLbl}» (OVR ${ovr}).`;
+      : `Стабильная вратарская практика в «${clubLbl}»${bgShort}.`;
   }
   if (goals + assists >= 2 && matches > 0) {
     return `Яркая результативность в «${clubLbl}» (${goals} Г + ${assists} П за ${matches} м.${ratStr}).`;
@@ -28518,12 +28537,12 @@ function buildNationalCallupReasonFallback(p: any, teamType: "main" | "u21" = "m
     const a = ageOfPlayer(p);
     return matches > 0
       ? `Лидер молодёжной группы${a ? ` (${a} л.)` : ""} в «${clubLbl}» (${matches} м.${ratStr}).`
-      : `Перспективный игрок для молодёжки U21 из «${clubLbl}» (OVR ${ovr}).`;
+      : `Перспективный игрок для молодёжки U21 из «${clubLbl}»${bgShort}.`;
   }
   if (matches > 0) {
     return `Стабильная игровая практика в «${clubLbl}» (${matches} м.${ratStr}).`;
   }
-  return `Выбор штаба из «${clubLbl}» по уровню (OVR ${ovr}).`;
+  return `Вызов под задачи штаба из состава «${clubLbl}»${bgShort}.`;
 }
 function isRussianNationalEligible(p: any, teamType: "main" | "u21" = "main") {
   if (!p) return false;
@@ -28589,7 +28608,6 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
       isAbroad: st.isAbroad,
       abroadClub: p.abroadClub || null,
       abroadCountry: p.abroadCountry || (p.teamId ? team(p.teamId)?.country : null) || null,
-      ovr: st.ovr,
       goals: st.goals,
       assists: st.assists,
       matches: st.matches,
@@ -28605,7 +28623,7 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
       outObj.callupReason = reasonsMap[p.id] || buildNationalCallupReasonFallback(p, tt, 0, st);
     }
     return outObj;
-  }).filter(Boolean);
+  }).filter(Boolean).sort(compareNationalPlayersPosClubAge);
   const matches = (brk.matches || []).map((m) => ({
     ...m,
     teamType: tt,
@@ -28634,7 +28652,6 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
       teamLogo: p?.teamId ? teamLogo(p.teamId) : "",
       leagueName: st?.leagueName || "",
       isAbroad: st ? st.isAbroad : false,
-      ovr: st ? st.ovr : 70,
       matches: st ? st.matches : 0,
       goals: st ? st.goals : 0,
       assists: st ? st.assists : 0,
@@ -28644,7 +28661,7 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
       inFinal: calledFin.has(pr.pid),
       inActiveSquad: activeStageSet.has(pr.pid)
     };
-  }).sort((a, b) => b.votes - a.votes || (b.avgRating || 0) - (a.avgRating || 0) || (b.ovr || 0) - (a.ovr || 0));
+  }).sort((a, b) => b.votes - a.votes || (b.avgRating || 0) - (a.avgRating || 0) || (b.matches || 0) - (a.matches || 0) || (NATIONAL_POS_ORDER[a.pos] ?? 99) - (NATIONAL_POS_ORDER[b.pos] ?? 99));
   const enrichedOpponentProposals = [...opponentProposals].sort((a, b) => b.votes - a.votes);
   return {
     ...brk,
@@ -28749,7 +28766,7 @@ app.post("/api/admin/national/generate", admin, async (req, res) => {
           const rawForm = String(p.form || "").trim();
           const formTag = (rawForm && rawForm.toLowerCase() !== BOILERPLATE_FORM) ? `|Форма:${rawForm.slice(0, 60)}` : "";
           const outTag = p.out ? `|ТРАВМА/ДИСКВ:${outText(p) || p.out}` : "";
-          return `${p.id}|${p.name}|${p.pos}|Возр:${pAge ?? "?"}|${st.clubLabel}|Лига:${st.leagueName}|OVR:${st.ovr}|${statPart}${stats2yTag}${formTag}${outTag}${abroadTag}${vTag}`;
+          return `${p.id}|${p.name}|${p.pos}|Возр:${pAge ?? "?"}|${st.clubLabel}|Лига:${st.leagueName}|${statPart}${stats2yTag}${formTag}${outTag}${abroadTag}${vTag}`;
         }
       ).join("\n");
       const teamLabelSys = teamType === "u21"
@@ -28758,9 +28775,9 @@ app.post("/api/admin/national/generate", admin, async (req, res) => {
       const teamLabelPrompt = teamType === "u21"
         ? "молодёжной сборной России U21 (до 21 года)"
         : "сборной России";
-      const sys = `Ты — главный тренер ${teamLabelSys} по футболу. Выбирай состав строго по позиции (минимум ${stage === "final" ? "3 вратаря, 8 защитников, 8 полузащитников, 4 нападающих" : "4 вратаря, 12 защитников, 14 полузащитников, 7 нападающих"}), опираясь на уровень лиги (РПЛ и зарубежные лиги приоритетнее ФНЛ/2-й лиги и тем более Медиалиги), рейтинг OVR, статистику текущего сезона (матчи, минуты, голы, пасы, сейвы/сухие матчи, СрОц) и прошлый бэкграунд. Российские легионеры за рубежом имеют высокий приоритет.` + aiInstructionSuffix;
+      const sys = `Ты — главный тренер ${teamLabelSys} по футболу. Выбирай состав строго по позиции (минимум ${stage === "final" ? "3 вратаря, 8 защитников, 8 полузащитников, 4 нападающих" : "4 вратаря, 12 защитников, 14 полузащитников, 7 нападающих"}), опираясь на уровень лиги (РПЛ и зарубежные лиги приоритетнее ФНЛ/2-й лиги и тем более Медиалиги), статистику текущего сезона (матчи, минуты, голы, пасы, сейвы/сухие матчи, СрОц), прошлый бэкграунд и возраст/роль в клубе. Российские легионеры за рубежом имеют высокий приоритет.` + aiInstructionSuffix;
       const reasonSpec = stage === "final"
-        ? ` Также для каждого из 25 выбранных игроков напиши краткий конкретный комментарий (6-13 слов на русском), почему именно он вызван в основной состав (укажи клуб/лигу, реальную статистику сезона или OVR/оценку, не выдумывай несуществующие голы). Верни JSON строго в формате: {"ids": ["id1", ...], "reasons": {"id1": "краткий коммент почему вызван", ...}}`
+        ? ` Также для каждого из 25 выбранных игроков напиши краткий конкретный комментарий (6-13 слов на русском), почему именно он вызван в основной состав (укажи клуб/лигу, реальную статистику сезона/оценку или прошлый опыт, не выдумывай несуществующие голы). Верни JSON строго в формате: {"ids": ["id1", ...], "reasons": {"id1": "краткий коммент почему вызван", ...}}`
         : ` Верни JSON: {"ids": ["id1", "id2", ...]}`;
       const prompt = `Сформируй ${stage === "final" ? "ИТОГОВЫЙ (основной) состав (ровно 25 игроков)" : "РАСШИРЕННЫЙ состав (ровно 40 игроков)"} ${teamLabelPrompt} на ближайшую паузу из списка кандидатов:\n${candidates}\n\n${reasonSpec}`;
       const raw = await llm(sys, prompt, { json: true, task: teamType === "u21" ? "national_u21_squad" : "national_squad", temp: 0.3, max: stage === "final" ? 3200 : 2000 });
