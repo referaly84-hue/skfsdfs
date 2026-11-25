@@ -3057,7 +3057,10 @@ export async function renderNationalProposalsSection(
           ? `<div style="background:var(--soft);padding:10px;border-radius:8px;border:1px solid var(--line);margin-bottom:12px">
               <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
                 <select id="nt_prop_pid" style="flex:1;min-width:190px">
-                  ${clubRoster.map((p: any) => `<option value="${e(p.id)}">${e(p.name)} (${e(p.pos)} · Рейт ${Number(p.rating || 0).toFixed(1)})</option>`).join('')}
+                  ${clubRoster.map((p: any) => {
+                    const pOvr = Number(p.ovr || p.card?.ovr || p.card?.rating || p.rating || 0);
+                    return `<option value="${e(p.id)}">${e(p.name)} (${e(p.pos)}${pOvr > 0 ? ` · OVR ${Math.round(pOvr)}` : ''})</option>`;
+                  }).join('')}
                 </select>
                 <button class="btn sm" id="nt_prop_player_btn" ${ntBtnDisabled ? 'disabled' : ''} style="min-height:42px;font-variant-numeric:tabular-nums;${ntBtnDisabled ? 'opacity:0.6' : ''}">
                   ${ntMaxed
@@ -3075,7 +3078,10 @@ export async function renderNationalProposalsSection(
 
         ${playerProps.length
           ? `<div class="wrap"><table><thead><tr><th class="l">Кандидат</th><th>Стат.</th><th>Голоса</th><th></th></tr></thead><tbody style="font-variant-numeric:tabular-nums">
-            ${playerProps.map((pr: any) => `
+            ${playerProps.map((pr: any) => {
+              const pRat = Number(pr.avgRating || pr.rating || 0);
+              const statBadge = pRat > 0 ? `★${pRat.toFixed(1)}` : `OVR:${pr.ovr || 70}`;
+              return `
               <tr>
                 <td class="l">
                   <b>${e(pr.playerName)}</b> <span class="small muted">(${e(pr.pos)}, ${e(pr.teamName)})</span>
@@ -3084,7 +3090,7 @@ export async function renderNationalProposalsSection(
                     ${pr.note ? ' · ' + e(pr.note) : ''}
                   </div>
                 </td>
-                <td class="small">М:${pr.matches} Г:${pr.goals} Р:${Number(pr.rating || 0).toFixed(1)}</td>
+                <td class="small">М:${pr.matches || 0} Г:${pr.goals || 0}${(pr.assists || 0) > 0 ? ` П:${pr.assists}` : ''} · ${statBadge}</td>
                 <td><b>${pr.votes}</b></td>
                 <td>
                   <button class="btn alt sm" data-nt-vote-pl="${e(pr.pid)}" ${ntBtnDisabled ? 'disabled' : ''} style="min-height:38px;font-variant-numeric:tabular-nums;${ntBtnDisabled ? 'opacity:0.6' : ''}">
@@ -3095,7 +3101,8 @@ export async function renderNationalProposalsSection(
                         : '+1 (реклама)'}
                   </button>
                 </td>
-              </tr>`).join('')}
+              </tr>`;
+            }).join('')}
           </tbody></table></div>`
           : '<div class="small muted">На этот сбор клубы ещё не предлагали кандидатов.</div>'}
       </div>

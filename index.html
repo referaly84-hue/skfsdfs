@@ -17991,7 +17991,7 @@ async function pgNational(app, subTeam) {
       return `<div class="empty">${activeStage === 'final' ? 'Итоговый список (кого вызвали) ещё не сформирован.' : 'Расширенный состав на ближайшую паузу ещё не опубликован.'}</div>`;
     }
     return `<div class="scroll-hint"><span>👉 Прокручивайте состав вправо</span></div><div class="wrap"><table class="nt-table">
-      <thead><tr><th>№</th><th class="l">Игрок</th><th>Поз.</th><th>Возр.</th><th class="l">Клуб</th>${showReasons ? '<th class="l nt-reason">Почему вызван</th>' : ''}<th>Матчи</th><th>Голы</th><th>Пасы</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+      <thead><tr><th>№</th><th class="l">Игрок</th><th>Поз.</th><th>Возр.</th><th class="l">Клуб</th>${showReasons ? '<th class="l nt-reason">Почему вызван</th>' : ''}<th>OVR</th><th>Матчи</th><th>Голы</th><th>Пасы</th><th>Оценка</th>${canEdit ? '<th></th>' : ''}</tr></thead>
       <tbody>
         ${list.map((p, i) => `<tr>
           <td><b>${p.number || p.num || (i + 1)}</b></td>
@@ -18000,9 +18000,11 @@ async function pgNational(app, subTeam) {
           <td class="small muted">${p.age != null ? `${p.age} л.` : '—'}</td>
           <td class="l"><div class="t-cell">${p.teamLogo ? `<img class="t-logo" src="${p.teamLogo}" alt=""/>` : ''}<span>${e(p.teamName)}${p.isAbroad && p.abroadCountry && !String(p.teamName || '').includes(p.abroadCountry) ? ` <span class="muted small">(${e(p.abroadCountry)})</span>` : ''}</span></div></td>
           ${showReasons ? `<td class="l small nt-reason" style="max-width:280px;color:#334155;line-height:1.35">${e(p.callupReason || '—')}</td>` : ''}
+          <td><b>${p.ovr || 70}</b></td>
           <td>${p.matches || 0}</td>
           <td>${p.goals || 0}</td>
           <td>${p.assists || 0}</td>
+          <td>${Number(p.avgRating || p.rating || 0) > 0 ? `<span class="tag sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac">★ ${Number(p.avgRating || p.rating).toFixed(2)}</span>` : '<span class="muted">—</span>'}</td>
           ${canEdit ? `<td><button class="btn alt sm" data-nt-rem="${p.id}">Убрать</button></td>` : ''}
         </tr>`).join('')}
       </tbody>
@@ -18085,7 +18087,7 @@ async function pgNational(app, subTeam) {
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
           <select id="nt_add_pid" style="flex:1;min-width:240px">
-            ${allPlayers.slice(0, 600).map(p => `<option value="${p.id}">${p.abroadClub ? '🌍 ' : ''}${e(p.name)} (${p.pos}${p.age != null ? ', ' + p.age + ' л.' : ''}, ${e(p.abroadClub ? `${p.abroadClub}${p.abroadCountry ? ' · ' + p.abroadCountry : ''}` : teamName(p.teamId))})</option>`).join('')}
+            ${allPlayers.slice(0, 600).map(p => `<option value="${p.id}">${p.abroadClub ? '🌍 ' : ''}${e(p.name)} (${p.pos}${p.age != null ? ', ' + p.age + ' л.' : ''}, ${e(p.abroadClub ? `${p.abroadClub}${p.abroadCountry ? ' · ' + p.abroadCountry : ''}` : teamName(p.teamId))}${p.ovr ? ', OVR ' + p.ovr : ''}${p.matches > 0 ? `, ${p.matches}м ${p.goals || 0}+${p.assists || 0}` : ''})</option>`).join('')}
           </select>
           <button class="btn alt" id="nt_add_btn">Добавить в ${activeStage === 'final' ? 'кого вызвали' : 'расширенный состав'}</button>
         </div>

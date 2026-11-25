@@ -3368,38 +3368,98 @@ export function getNationalProposals(ntCurrent: any) {
 }
 
 /**
- * Applies fan/club proposal vote priority to the national team pool:
+ * Applies real season stats, OVR, league tier, and fan/club proposal vote priority
+ * to the national team candidate pool:
+ * - Distinguishes player skill OVR (30..99) from match average rating (4.0..10.0).
+ * - Prioritizes top-tier domestic (RPL) and abroad legionnaires over lower/media tiers.
  * - Good-form players receive a bounded tie-breaker bonus proportional to votes
  *   so 4 votes beats 1 vote when both played well.
- * - Terrible-form players (matches > 0 and rating < 5.9) get ZERO vote boost so
+ * - Terrible-form players (matches > 0 and avgRating < 5.9) get ZERO vote boost so
  *   a terribly performing player with 4 votes will still lose to a solid player with 1 vote.
  */
 export function scoreNationalCandidateWithVotes(
   p: any,
   votesMap: Map<string, number>,
-  opts?: { isAbroad?: boolean }
+  opts?: {
+    isAbroad?: boolean;
+    leagueComp?: string | null;
+    ovr?: number;
+    avgRating?: number;
+    matches?: number;
+    goals?: number;
+    assists?: number;
+    minutes?: number;
+    saves?: number;
+    cleanSheets?: number;
+    tackles?: number;
+  }
 ): number {
-  const rating = Number(p.rating || 0);
-  const goals = Number(p.goals || 0);
-  const assists = Number(p.assists || 0);
-  const ovr = Number(p.ovr || 70);
-  const matches = Number(p.matches || 0);
+  const rawRating = Number(p?.rating || 0);
+  const ovr = Number(
+    opts?.ovr ??
+      (Number.isFinite(Number(p?.ovr)) && Number(p.ovr) >= 25 ? Number(p.ovr) : 0) ??
+      0
+  ) || (rawRating >= 25 ? rawRating : 70);
+  const avgRating = Number(
+    opts?.avgRating ??
+      p?.avgRating ??
+      (rawRating > 0 && rawRating <= 10.5 ? rawRating : 0)
+  );
+  const matches = Number(opts?.matches ?? p?.matches ?? 0);
+  const goals = Number(opts?.goals ?? p?.goals ?? 0);
+  const assists = Number(opts?.assists ?? p?.assists ?? 0);
+  const minutes = Number(opts?.minutes ?? p?.minutes ?? 0);
+  const saves = Number(opts?.saves ?? p?.saves ?? 0);
+  const cleanSheets = Number(opts?.cleanSheets ?? p?.cleanSheets ?? 0);
+  const tackles = Number(opts?.tackles ?? p?.tackles ?? 0);
+  const pos = String(p?.pos || '');
+  const isGk = pos === 'ВР';
+
   const abroad = Boolean(
     opts?.isAbroad ||
     (p?.abroadClub && String(p.abroadClub).trim()) ||
     p?.teamComp === 'europe' ||
     p?.isAbroad
   );
-  let baseScore = rating * 10 + goals * 3 + assists * 2 + ovr * 0.2;
+  const comp = String(opts?.leagueComp || p?.leagueComp || p?.teamComp || p?.comp || '').toLowerCase();
+
+  let tierBonus = 0;
   if (abroad) {
-    // Легионеры за границей обычно не имеют матчей в статистике РПЛ, но должны иметь высокий приоритет
-    baseScore += 92 + Math.max(0, ovr - 65) * 2.4;
+    // Легионеры за границей не имеют матчей в статистике РПЛ, но должны иметь высокий приоритет
+    tierBonus = 68 + Math.max(0, ovr - 65) * 2.4;
+  } else if (comp === 'rpl') {
+    tierBonus = 38;
+  } else if (comp === 'fnl') {
+    tierBonus = 16;
+  } else if (comp === '2la_gold' || comp === '2la_silver') {
+    tierBonus = 5;
+  } else if (comp.startsWith('2lb')) {
+    tierBonus = 0;
+  } else if (comp.startsWith('media')) {
+    tierBonus = -20;
+  } else if (!p?.teamId) {
+    tierBonus = -8;
   }
-  const votes = votesMap.get(p.id) || 0;
+
+  let baseScore = tierBonus + (ovr - 60) * 2.2;
+  if (matches > 0) {
+    baseScore += Math.min(matches, 15) * 1.6 + Math.min(minutes / 90, 15) * 0.7;
+    if (avgRating > 0) {
+      baseScore += (avgRating - 6.3) * 12;
+    }
+    baseScore += goals * 3.8 + assists * 2.6;
+    if (isGk) {
+      baseScore += saves * 0.55 + cleanSheets * 4.0;
+    } else {
+      baseScore += tackles * 0.35 + cleanSheets * 1.2;
+    }
+  }
+
+  const votes = votesMap.get(p?.id) || 0;
   if (votes <= 0) return baseScore;
-  const terribleForm = !abroad && matches > 0 && rating > 0 && rating < 5.9;
+  const terribleForm = !abroad && matches > 0 && avgRating > 0 && avgRating < 5.9;
   if (terribleForm) return baseScore;
-  const voteBonus = Math.min(votes, 15) * 2.5;
+  const voteBonus = Math.min(votes, 15) * 3.5;
   return baseScore + voteBonus;
 }
 
@@ -3417,7 +3477,7 @@ export function buildNationalProposalAiLines(ntCurrent: any): {
   }
   const abroadHint = ' ВАЖНО: Российские легионеры, выступающие за рубежом (помечены [ЛЕГИОНЕР: ...]), имеют ВЫСОКИЙ ПРИОРИТЕТ при вызове в сборную, даже если у них 0 матчей в статистике РПЛ — они получают практику в зарубежных чемпионатах и должны активно вызываться в состав.';
   const aiInstructionSuffix = (playerProposals.length
-    ? ' Клубы и болельщики предложили часть кандидатов через голосование (указано [ПРЕДЛОЖЕН: X гол.]). Если два игрока показывают сопоставимые хорошие результаты и осталось спорное место в заявке — отдавай приоритет игроку с большим числом голосов (например 4 голоса важнее 1). Но если игрок с высоким числом голосов играет откровенно плохо (низкий рейтинг < 5.9 или провальная форма), бери достойно играющего кандидата даже с 1 голосом.'
+    ? ' Клубы и болельщики предложили часть кандидатов через голосование (указано [ПРЕДЛОЖЕН: X гол.]). Если два игрока показывают сопоставимые хорошие результаты и осталось спорное место в заявке — отдавай приоритет игроку с большим числом голосов (например 4 голоса важнее 1). Но если игрок с высоким числом голосов играет откровенно плохо (средняя оценка СрОц < 5.9 или провальная форма), бери достойно играющего кандидата даже с 1 голосом.'
     : '') + abroadHint;
   return { votesMap, notesByPid, aiInstructionSuffix };
 }

@@ -9728,8 +9728,10 @@ function agg() {
   aggCache = { season: S(), P, T };
   return aggCache;
 }
+var _natStatsMemo: { key: string; map: Map<string, any> } | null = null;
 var invalidateAgg = () => {
   aggCache = null;
+  _natStatsMemo = null;
 };
 function getEnvGeminiKeys() {
   const raw = [];
@@ -24535,10 +24537,29 @@ app.get("/api/admin/players", admin, (req, res) => {
   if (q2) l = l.filter((p) => norm(p.name).includes(q2) || norm(p.abroadClub || "").includes(q2) || norm(p.abroadCountry || "").includes(q2));
   const limit = Math.min(2000, Math.max(50, Number(req.query.limit) || (eligible ? 1500 : 300)));
   if (eligible) {
-    l = [...l].sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0) || String(a.name || "").localeCompare(String(b.name || ""), "ru"));
+    const emptyVotes = new Map<string, number>();
+    l = [...l].sort((a, b) => {
+      const sa = getPlayerNationalStats(a);
+      const sb = getPlayerNationalStats(b);
+      return (
+        scoreNationalCandidateWithVotes(b, emptyVotes, sb) -
+          scoreNationalCandidateWithVotes(a, emptyVotes, sa) ||
+        String(a.name || "").localeCompare(String(b.name || ""), "ru")
+      );
+    });
   }
   res.json(l.slice(0, limit).map((p) => {
-    const out = pubPlayer(p);
+    const out: any = pubPlayer(p);
+    if (eligible) {
+      const st = getPlayerNationalStats(p);
+      out.ovr = st.ovr;
+      out.matches = st.matches;
+      out.goals = st.goals;
+      out.assists = st.assists;
+      out.avgRating = st.avgRating;
+      out.rating = st.avgRating;
+      out.leagueName = st.leagueName;
+    }
     const sis = p.teamId ? sisterIdsOf(p.teamId) : [];
     if (sis.length) {
       out.familyTargets = sis.map((id) => ({ id, name: tn(id), isMain: !team(id)?.parentTeamId && !isReserveOrYouthName(tn(id)) }));
@@ -28296,6 +28317,158 @@ app.post("/api/admin/transfer/direct", admin, (req, res) => {
     message: `\u0417\u0430\u043F\u0440\u043E\u0441 \u043D\u0430 ${isLoan ? "\u0430\u0440\u0435\u043D\u0434\u0443" : "\u0442\u0440\u0430\u043D\u0441\u0444\u0435\u0440"} \u0438\u0433\u0440\u043E\u043A\u0430 ${p.name} (${feeStr}) \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u0435\u043D \u0432\u043B\u0430\u0434\u0435\u043B\u044C\u0446\u0443 \xAB${fromTeam?.name}\xBB. \u041F\u0435\u0440\u0435\u0445\u043E\u0434 \u0441\u043E\u0441\u0442\u043E\u0438\u0442\u0441\u044F \u043F\u0440\u0438 \u0441\u043E\u0433\u043B\u0430\u0441\u0438\u0438 \u043A\u043B\u0443\u0431\u0430.`
   });
 });
+function getNationalPlayerSeasonStatsMap(): Map<string, any> {
+  const curS = S();
+  const fxList = seasonFx().filter(
+    (f: any) =>
+      f &&
+      f.status === "done" &&
+      f.st?.players &&
+      !isIntraSquad(f) &&
+      f.comp !== FRIENDLY_COMP &&
+      f.comp !== "friendly"
+  );
+  const key = `${curS}:${fxList.length}`;
+  if (_natStatsMemo && _natStatsMemo.key === key) {
+    return _natStatsMemo.map;
+  }
+  const map = new Map<string, any>();
+  const doneSorted = [...fxList].sort(
+    (a: any, b: any) =>
+      String(a.date || "").localeCompare(String(b.date || "")) ||
+      String(a.time || "").localeCompare(String(b.time || ""))
+  );
+  for (const f of doneSorted) {
+    const mObj = getMatch(f.id);
+    const hName = tn(f.home);
+    const aName = tn(f.away);
+    const ratingsArr = (Array.isArray(mObj?.ratings) && mObj.ratings.length)
+      ? mObj.ratings
+      : computeMatchRatings({ stats: f.st }, f, hName, aName);
+    const ratingByPid = new Map<string, number>();
+    for (const r of ratingsArr) {
+      const rPid = r?.playerId || r?.id;
+      const val = Number(r?.rating);
+      if (rPid && Number.isFinite(val) && val > 0) {
+        ratingByPid.set(String(rPid), val);
+      }
+    }
+    const hg = typeof f.hg === "number" ? f.hg : (typeof f.homeScore === "number" ? f.homeScore : Number(f.st?.teams?.home?.g || 0));
+    const ag = typeof f.ag === "number" ? f.ag : (typeof f.awayScore === "number" ? f.awayScore : Number(f.st?.teams?.away?.g || 0));
+    for (const [pid, ps] of Object.entries(f.st.players || {}) as [string, any][]) {
+      const minVal = Number(ps?.min || 0);
+      const played = minVal > 0 || ps?.started === true;
+      if (!played) continue;
+      const dbP = player(pid);
+      const isGk = (dbP?.pos || ps?.pos) === "ВР";
+      const side = (ps?.side === "home" || ps?.side === "away")
+        ? ps.side
+        : (ps?.t === f.away ? "away" : (ps?.t === f.home ? "home" : (dbP?.teamId === f.away ? "away" : "home")));
+      const oppGoals = side === "away" ? hg : ag;
+      const csInc = isGk
+        ? (Number(ps?.cs || 0) > 0 || (oppGoals === 0 && minVal >= 45) ? 1 : 0)
+        : (oppGoals === 0 && minVal >= 45 ? 1 : 0);
+
+      let entry = map.get(pid);
+      if (!entry) {
+        entry = {
+          matches: 0,
+          minutes: 0,
+          goals: 0,
+          assists: 0,
+          saves: 0,
+          cleanSheets: 0,
+          tackles: 0,
+          yc: 0,
+          rc: 0,
+          xg: 0,
+          ratingSum: 0,
+          ratingCount: 0,
+          avgRating: 0
+        };
+        map.set(pid, entry);
+      }
+      entry.matches += 1;
+      entry.minutes += minVal;
+      entry.goals += Number(ps?.g || 0);
+      entry.assists += Number(ps?.a || 0);
+      if (isGk) entry.saves += Number(ps?.sv || 0);
+      entry.cleanSheets += csInc;
+      entry.tackles += Number(ps?.tk || 0);
+      entry.yc += Number(ps?.yc || 0);
+      entry.rc += Number(ps?.rc || 0);
+      entry.xg = +(entry.xg + Number(ps?.xg || 0)).toFixed(2);
+      const rVal = ratingByPid.get(pid);
+      if (rVal !== undefined) {
+        entry.ratingSum += rVal;
+        entry.ratingCount += 1;
+        entry.avgRating = +(entry.ratingSum / entry.ratingCount).toFixed(2);
+      }
+    }
+  }
+  _natStatsMemo = { key, map };
+  return map;
+}
+function getPlayerNationalStats(p: any) {
+  if (!p) {
+    return {
+      ovr: 70,
+      matches: 0,
+      minutes: 0,
+      goals: 0,
+      assists: 0,
+      saves: 0,
+      cleanSheets: 0,
+      tackles: 0,
+      avgRating: 0,
+      isAbroad: false,
+      leagueComp: null as string | null,
+      leagueName: "—",
+      clubLabel: "—"
+    };
+  }
+  const stMap = getNationalPlayerSeasonStatsMap();
+  const s = stMap.get(p.id);
+  const abroad = isRussianAbroadPlayer(p);
+  const tObj = p.teamId ? team(p.teamId) : null;
+  const leagueComp = tObj?.comp || (abroad ? "europe" : null);
+  const leagueName = tObj?.comp
+    ? (compOf(tObj.comp)?.name || tObj.comp)
+    : (abroad ? "Зарубежный клуб" : "Свободный агент");
+  const rawOvr = Number(p.ovr);
+  const rawRating = Number(p.rating);
+  const ovr = (Number.isFinite(rawOvr) && rawOvr >= 25 && rawOvr <= 99)
+    ? Math.round(rawOvr)
+    : ((Number.isFinite(rawRating) && rawRating >= 25 && rawRating <= 99) ? Math.round(rawRating) : 70);
+
+  const hasSim = Boolean(s && s.matches > 0);
+  const matches = hasSim ? s.matches : Number(p.matches || 0);
+  const minutes = hasSim ? s.minutes : Number(p.minutes || 0);
+  const goals = hasSim ? s.goals : Number(p.goals || 0);
+  const assists = hasSim ? s.assists : Number(p.assists || 0);
+  const saves = hasSim ? s.saves : Number(p.saves || 0);
+  const cleanSheets = hasSim ? s.cleanSheets : Number(p.cleanSheets || 0);
+  const tackles = hasSim ? s.tackles : Number(p.tackles || 0);
+  const avgRating = hasSim
+    ? Number(s.avgRating || 0)
+    : ((Number.isFinite(rawRating) && rawRating > 0 && rawRating <= 10.5) ? +rawRating.toFixed(2) : 0);
+
+  return {
+    ovr,
+    matches,
+    minutes,
+    goals,
+    assists,
+    saves,
+    cleanSheets,
+    tackles,
+    avgRating,
+    isAbroad: abroad,
+    leagueComp,
+    leagueName,
+    clubLabel: nationalPlayerClubLabel(p)
+  };
+}
 function normalizeNationalTeamType(raw?: any): "main" | "u21" {
   const s = String(raw || "").trim().toLowerCase();
   return s === "u21" || s === "u-21" || s === "youth" ? "u21" : "main";
@@ -28314,38 +28487,43 @@ function nationalPlayerClubLabel(p: any): string {
   if (p.teamId) return tn(p.teamId);
   return "Свободный агент";
 }
-function buildNationalCallupReasonFallback(p: any, teamType: "main" | "u21" = "main", votes = 0): string {
+function buildNationalCallupReasonFallback(p: any, teamType: "main" | "u21" = "main", votes = 0, preStats?: any): string {
   if (!p) return "Выбор тренерского штаба по текущей форме.";
-  const isAbroad = isRussianAbroadPlayer(p);
-  const clubLbl = nationalPlayerClubLabel(p);
-  const goals = Number(p.goals || 0);
-  const assists = Number(p.assists || 0);
-  const matches = Number(p.matches || 0);
+  const st = preStats || getPlayerNationalStats(p);
+  const isAbroad = st.isAbroad;
+  const clubLbl = st.clubLabel || nationalPlayerClubLabel(p);
+  const goals = Number(st.goals || 0);
+  const assists = Number(st.assists || 0);
+  const matches = Number(st.matches || 0);
+  const avgRating = Number(st.avgRating || 0);
+  const saves = Number(st.saves || 0);
+  const ovr = Number(st.ovr || 70);
   const pos = String(p.pos || "ЦП");
+  const ratStr = avgRating > 0 ? `, ср. оц. ${avgRating.toFixed(2)}` : "";
   if (isAbroad) {
-    return `Легионер в «${clubLbl}»: высокая ценность за зарубежный опыт.`;
+    return `Легионер в «${clubLbl}» (OVR ${ovr}): высокая ценность за зарубежный опыт.`;
   }
   if (pos === "ВР") {
     return matches > 0
-      ? `Надёжная игра в воротах «${clubLbl}» (${matches} игр в сезоне).`
-      : `Высокий класс вратаря в обойме «${clubLbl}».`;
+      ? `Надёжная игра в воротах «${clubLbl}» (${matches} м., ${saves} сейвов${ratStr}).`
+      : `Высокий класс вратаря в обойме «${clubLbl}» (OVR ${ovr}).`;
   }
-  if (goals + assists >= 4) {
-    return `Яркая результативность в сезоне за «${clubLbl}» (${goals} Г + ${assists} П).`;
+  if (goals + assists >= 2 && matches > 0) {
+    return `Яркая результативность в «${clubLbl}» (${goals} Г + ${assists} П за ${matches} м.${ratStr}).`;
   }
   if (votes >= 2) {
-    return `Сильный отрезок в «${clubLbl}» и поддержка болельщиков (${votes} гол.).`;
+    return `Сильный отрезок в «${clubLbl}» и поддержка болельщиков (${votes} гол.${ratStr}).`;
   }
   if (teamType === "u21") {
     const a = ageOfPlayer(p);
     return matches > 0
-      ? `Один из лидеров своего возраста${a ? ` (${a} л.)` : ""} в «${clubLbl}» (${matches} игр).`
-      : `Перспективный игрок для молодёжки U21 из «${clubLbl}».`;
+      ? `Лидер молодёжной группы${a ? ` (${a} л.)` : ""} в «${clubLbl}» (${matches} м.${ratStr}).`
+      : `Перспективный игрок для молодёжки U21 из «${clubLbl}» (OVR ${ovr}).`;
   }
   if (matches > 0) {
-    return `Стабильная форма и игровая практика в «${clubLbl}» (${matches} игр).`;
+    return `Стабильная игровая практика в «${clubLbl}» (${matches} м.${ratStr}).`;
   }
-  return `Выбор штаба под тактику из состава «${clubLbl}».`;
+  return `Выбор штаба из «${clubLbl}» по уровню (OVR ${ovr}).`;
 }
 function isRussianNationalEligible(p: any, teamType: "main" | "u21" = "main") {
   if (!p) return false;
@@ -28396,7 +28574,7 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
   const enrichIds = (ids, includeReasons = false) => (ids || []).map((id) => {
     const p = player(id);
     if (!p) return null;
-    const abroad = isRussianAbroadPlayer(p);
+    const st = getPlayerNationalStats(p);
     const outObj: any = {
       id: p.id,
       name: p.name,
@@ -28404,20 +28582,27 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
       age: ageOfPlayer(p),
       nation: p.nation || "Россия",
       teamId: p.teamId || null,
-      teamName: nationalPlayerClubLabel(p),
+      teamName: st.clubLabel,
       teamLogo: p.teamId ? teamLogo(p.teamId) : "",
-      isAbroad: abroad,
+      leagueComp: st.leagueComp,
+      leagueName: st.leagueName,
+      isAbroad: st.isAbroad,
       abroadClub: p.abroadClub || null,
       abroadCountry: p.abroadCountry || (p.teamId ? team(p.teamId)?.country : null) || null,
-      ovr: p.ovr || 70,
-      goals: p.goals || 0,
-      assists: p.assists || 0,
-      matches: p.matches || 0,
-      rating: p.rating || 0
+      ovr: st.ovr,
+      goals: st.goals,
+      assists: st.assists,
+      matches: st.matches,
+      minutes: st.minutes,
+      saves: st.saves,
+      cleanSheets: st.cleanSheets,
+      tackles: st.tackles,
+      avgRating: st.avgRating,
+      rating: st.avgRating
     };
     // Краткий комментарий почему вызвали показываем ТОЛЬКО в итоговом (основном) составе, в расширенном — нет
     if (includeReasons) {
-      outObj.callupReason = reasonsMap[p.id] || buildNationalCallupReasonFallback(p, tt, 0);
+      outObj.callupReason = reasonsMap[p.id] || buildNationalCallupReasonFallback(p, tt, 0, st);
     }
     return outObj;
   }).filter(Boolean);
@@ -28438,25 +28623,28 @@ function enrichNationalBreak(brk, teamType: "main" | "u21" = "main") {
   const activeStageSet = brk.stage === "final" ? calledFin : calledExt;
   const enrichedPlayerProposals = playerProposals.map((pr) => {
     const p = player(pr.pid);
+    const st = p ? getPlayerNationalStats(p) : null;
     return {
       ...pr,
       playerName: p?.name || "Игрок",
       pos: p?.pos || "ЦП",
       age: p ? ageOfPlayer(p) : null,
       teamId: p?.teamId || pr.proposedByTeamId,
-      teamName: p ? nationalPlayerClubLabel(p) : pr.proposedByName,
+      teamName: st ? st.clubLabel : pr.proposedByName,
       teamLogo: p?.teamId ? teamLogo(p.teamId) : "",
-      isAbroad: p ? isRussianAbroadPlayer(p) : false,
-      ovr: p?.ovr || 70,
-      matches: p?.matches || 0,
-      goals: p?.goals || 0,
-      assists: p?.assists || 0,
-      rating: p?.rating || 0,
+      leagueName: st?.leagueName || "",
+      isAbroad: st ? st.isAbroad : false,
+      ovr: st ? st.ovr : 70,
+      matches: st ? st.matches : 0,
+      goals: st ? st.goals : 0,
+      assists: st ? st.assists : 0,
+      avgRating: st ? st.avgRating : 0,
+      rating: st ? st.avgRating : 0,
       inExtended: calledExt.has(pr.pid),
       inFinal: calledFin.has(pr.pid),
       inActiveSquad: activeStageSet.has(pr.pid)
     };
-  }).sort((a, b) => b.votes - a.votes || b.rating - a.rating);
+  }).sort((a, b) => b.votes - a.votes || (b.avgRating || 0) - (a.avgRating || 0) || (b.ovr || 0) - (a.ovr || 0));
   const enrichedOpponentProposals = [...opponentProposals].sort((a, b) => b.votes - a.votes);
   return {
     ...brk,
@@ -28503,34 +28691,65 @@ app.post("/api/admin/national/generate", admin, async (req, res) => {
     if (narrowed.length >= 20) pool2 = narrowed;
   }
   const { votesMap, notesByPid, aiInstructionSuffix } = buildNationalProposalAiLines(nt.current);
-  const sortedPool = [...pool2].sort(
-    (a, b) =>
-      scoreNationalCandidateWithVotes(b, votesMap, { isAbroad: isRussianAbroadPlayer(b) }) -
-      scoreNationalCandidateWithVotes(a, votesMap, { isAbroad: isRussianAbroadPlayer(a) })
-  );
-  let chosenIds = [];
+  const statsByPid = new Map<string, ReturnType<typeof getPlayerNationalStats>>();
+  const scoreByPid = new Map<string, number>();
+  for (const p of pool2) {
+    const st = getPlayerNationalStats(p);
+    statsByPid.set(p.id, st);
+    scoreByPid.set(p.id, scoreNationalCandidateWithVotes(p, votesMap, st));
+  }
+  const sortedPool = [...pool2].sort((a, b) => (scoreByPid.get(b.id) || 0) - (scoreByPid.get(a.id) || 0));
+  let chosenIds: string[] = [];
   const aiReasons: Record<string, string> = {};
   if (hasLLM() && sortedPool.length > 0) {
     try {
       const candidateSet = new Map<string, any>();
       // Всегда включаем легионеров за рубежом в пул кандидатов для ИИ, чтобы они не терялись из-за 0 матчей в РПЛ
       for (const p of sortedPool) {
-        if (isRussianAbroadPlayer(p)) candidateSet.set(p.id, p);
+        if (statsByPid.get(p.id)?.isAbroad) candidateSet.set(p.id, p);
       }
-      for (const p of sortedPool.slice(0, 70)) candidateSet.set(p.id, p);
+      // Включаем всех предложенных и поддержанных голосами
       for (const p of sortedPool) {
-        if ((votesMap.get(p.id) || 0) > 0 && !candidateSet.has(p.id)) {
-          candidateSet.set(p.id, p);
+        if ((votesMap.get(p.id) || 0) > 0) candidateSet.set(p.id, p);
+      }
+      // Гарантируем минимальное представительство каждой линии (особенно ВР, чтобы вратари не терялись из-за голов полевых)
+      const lineMinSlices: Array<{ poses: Set<string>; min: number }> = [
+        { poses: new Set(["ВР"]), min: 9 },
+        { poses: new Set(["ЦЗ", "ЛЗ", "ПЗ", "ЛФЗ", "ПФЗ"]), min: 20 },
+        { poses: new Set(["ОП", "ЦП", "ПП", "ЛП", "АП"]), min: 22 },
+        { poses: new Set(["ЦФ", "ПВ", "ЛВ", "СТ"]), min: 14 },
+      ];
+      for (const lm of lineMinSlices) {
+        let taken = 0;
+        for (const p of sortedPool) {
+          if (taken >= lm.min) break;
+          if (lm.poses.has(String(p.pos || ""))) {
+            candidateSet.set(p.id, p);
+            taken += 1;
+          }
         }
       }
-      const candidates = Array.from(candidateSet.values()).slice(0, 95).map(
+      for (const p of sortedPool) {
+        if (candidateSet.size >= 98) break;
+        candidateSet.set(p.id, p);
+      }
+      const BOILERPLATE_FORM = "в хорошей спортивной форме, тренируется с полной отдачей";
+      const candidates = Array.from(candidateSet.values()).slice(0, 100).map(
         (p) => {
+          const st = statsByPid.get(p.id) || getPlayerNationalStats(p);
           const votes = votesMap.get(p.id) || 0;
           const pNote = notesByPid.get(p.id);
           const pAge = ageOfPlayer(p);
-          const abroadTag = isRussianAbroadPlayer(p) ? `|ЛЕГИОНЕР:${nationalPlayerClubLabel(p)}` : "";
+          const abroadTag = st.isAbroad ? `|ЛЕГИОНЕР:${st.clubLabel}` : "";
           const vTag = votes > 0 ? `|ПРЕДЛОЖЕН:${votes} гол.${pNote ? ` (${pNote})` : ""}` : "";
-          return `${p.id}|${p.name}|${p.pos}|Возраст:${pAge ?? "?"}|${nationalPlayerClubLabel(p)}|М:${p.matches || 0}|Г:${p.goals || 0}|П:${p.assists || 0}${p.form ? `|Форма:${String(p.form).slice(0, 60)}` : ""}${abroadTag}${vTag}`;
+          const statPart = st.matches > 0
+            ? `Сезон:${st.matches}м/${st.minutes}мин Г:${st.goals} П:${st.assists}${p.pos === "ВР" ? ` Сейв:${st.saves} Сух:${st.cleanSheets}` : ` Отб:${st.tackles}`}${st.avgRating > 0 ? ` СрОц:${st.avgRating.toFixed(2)}` : ""}`
+            : `Сезон:0м`;
+          const stats2yTag = p.stats2y ? `|Прошл:${String(p.stats2y).slice(0, 55)}` : "";
+          const rawForm = String(p.form || "").trim();
+          const formTag = (rawForm && rawForm.toLowerCase() !== BOILERPLATE_FORM) ? `|Форма:${rawForm.slice(0, 60)}` : "";
+          const outTag = p.out ? `|ТРАВМА/ДИСКВ:${outText(p) || p.out}` : "";
+          return `${p.id}|${p.name}|${p.pos}|Возр:${pAge ?? "?"}|${st.clubLabel}|Лига:${st.leagueName}|OVR:${st.ovr}|${statPart}${stats2yTag}${formTag}${outTag}${abroadTag}${vTag}`;
         }
       ).join("\n");
       const teamLabelSys = teamType === "u21"
@@ -28539,16 +28758,24 @@ app.post("/api/admin/national/generate", admin, async (req, res) => {
       const teamLabelPrompt = teamType === "u21"
         ? "молодёжной сборной России U21 (до 21 года)"
         : "сборной России";
-      const sys = `Ты — главный тренер ${teamLabelSys} по футболу. Выбирай состав строго по позиции (минимум 3 вратаря, 8 защитников, 8 полузащитников, 4 нападающих), с высоким приоритетом для российских легионеров за рубежом и с учётом текущей формы.` + aiInstructionSuffix;
+      const sys = `Ты — главный тренер ${teamLabelSys} по футболу. Выбирай состав строго по позиции (минимум ${stage === "final" ? "3 вратаря, 8 защитников, 8 полузащитников, 4 нападающих" : "4 вратаря, 12 защитников, 14 полузащитников, 7 нападающих"}), опираясь на уровень лиги (РПЛ и зарубежные лиги приоритетнее ФНЛ/2-й лиги и тем более Медиалиги), рейтинг OVR, статистику текущего сезона (матчи, минуты, голы, пасы, сейвы/сухие матчи, СрОц) и прошлый бэкграунд. Российские легионеры за рубежом имеют высокий приоритет.` + aiInstructionSuffix;
       const reasonSpec = stage === "final"
-        ? ` Также для каждого из 25 выбранных игроков напиши краткий конкретный комментарий (6-13 слов на русском), почему именно он вызван в основной состав (отметь зарубежный клуб если легионер, голы/оценку/надёжность или возрастной прогресс). Верни JSON строго в формате: {"ids": ["id1", ...], "reasons": {"id1": "краткий коммент почему вызван", ...}}`
+        ? ` Также для каждого из 25 выбранных игроков напиши краткий конкретный комментарий (6-13 слов на русском), почему именно он вызван в основной состав (укажи клуб/лигу, реальную статистику сезона или OVR/оценку, не выдумывай несуществующие голы). Верни JSON строго в формате: {"ids": ["id1", ...], "reasons": {"id1": "краткий коммент почему вызван", ...}}`
         : ` Верни JSON: {"ids": ["id1", "id2", ...]}`;
       const prompt = `Сформируй ${stage === "final" ? "ИТОГОВЫЙ (основной) состав (ровно 25 игроков)" : "РАСШИРЕННЫЙ состав (ровно 40 игроков)"} ${teamLabelPrompt} на ближайшую паузу из списка кандидатов:\n${candidates}\n\n${reasonSpec}`;
       const raw = await llm(sys, prompt, { json: true, task: teamType === "u21" ? "national_u21_squad" : "national_squad", temp: 0.3, max: stage === "final" ? 3200 : 2000 });
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.ids)) {
         const validSet = new Set(sortedPool.map((p) => p.id));
-        chosenIds = parsed.ids.filter((id) => validSet.has(id)).slice(0, count);
+        const seenIds = new Set<string>();
+        chosenIds = [];
+        for (const id of parsed.ids) {
+          if (typeof id === "string" && validSet.has(id) && !seenIds.has(id)) {
+            seenIds.add(id);
+            chosenIds.push(id);
+            if (chosenIds.length >= count) break;
+          }
+        }
       }
       if (stage === "final" && parsed.reasons && typeof parsed.reasons === "object") {
         for (const [k, v] of Object.entries(parsed.reasons)) {
@@ -28594,7 +28821,7 @@ app.post("/api/admin/national/generate", admin, async (req, res) => {
     const finalReasons: Record<string, string> = {};
     for (const pid of chosenIds) {
       const pObj = player(pid);
-      finalReasons[pid] = aiReasons[pid] || buildNationalCallupReasonFallback(pObj, teamType, votesMap.get(pid) || 0);
+      finalReasons[pid] = aiReasons[pid] || buildNationalCallupReasonFallback(pObj, teamType, votesMap.get(pid) || 0, statsByPid.get(pid));
     }
     nt.current.finalReasons = finalReasons;
   }
