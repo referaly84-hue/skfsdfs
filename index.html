@@ -7074,7 +7074,9 @@ let TEAM_STATS_STATE = {
   playerSort: 'g',
   playerSortDir: 'desc',
   playerPos: 'all',
-  searchQuery: ''
+  searchQuery: '',
+  recentMatchesOpen: true,
+  recentMatchesAll: false
 };
 
 function formatMonthNameRu(mStr) {
@@ -7106,6 +7108,10 @@ async function renderTeamStatsView(container, teamId, opts = {}) {
   }
 
   const { team, period, activeMonth, activeSeason, activeComp, availableMonths, availableSeasons, availableComps, overview: ov, players, leaders } = data;
+  const periodMatches = Array.isArray(data.recentMatches) ? data.recentMatches : [];
+  const allLatestMatches = Array.isArray(data.latestTeamMatches) ? data.latestTeamMatches : [];
+  const displayMatches = periodMatches.length ? periodMatches : allLatestMatches;
+  const isFallbackMatches = !periodMatches.length && allLatestMatches.length > 0;
   const tLogo = team.logo || teamLogo(team.id);
 
   // Filter players
@@ -7165,12 +7171,13 @@ async function renderTeamStatsView(container, teamId, opts = {}) {
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="ts-period-group">
             <button class="ts-period-btn ${period === 'month' ? 'on' : ''}" data-ts-set-period="month">📅 Месяц</button>
             <button class="ts-period-btn ${period === 'season' ? 'on' : ''}" data-ts-set-period="season">🏆 Сезон</button>
             <button class="ts-period-btn ${period === 'all' ? 'on' : ''}" data-ts-set-period="all">♾️ Всё время</button>
           </div>
+          ${displayMatches.length ? `<button type="button" class="btn alt sm" id="ts_toggle_recent_matches_btn" style="padding:6px 11px;font-size:13px">📋 Последние матчи (${displayMatches.length})</button>` : ''}
           ${isModal ? `<button class="btn alt sm" id="ts_close_modal_btn" style="padding:6px 12px;font-size:14px">✕ Закрыть</button>` : ''}
         </div>
       </div>
@@ -7252,7 +7259,7 @@ async function renderTeamStatsView(container, teamId, opts = {}) {
                 <div class="row sp" style="margin-top:10px;align-items:center">
                   <span class="muted small">Форма:</span>
                   <div class="ts-form-pills">
-                    ${ov.recentForm.map(f => `<span class="ts-form-pill ${f.result}" title="${f.isHome ? 'Дома' : 'В гостях'} против ${e(f.opponentName)} (${f.score}), xG ${f.xg}:${f.xga}">${f.result}</span>`).join('')}
+                    ${ov.recentForm.map(f => `<a href="#/match/${e(f.id)}" data-ts-match-link class="ts-form-pill ${f.result}" style="text-decoration:none;cursor:pointer" title="Открыть матч: ${f.isHome ? 'Дома' : 'В гостях'} против ${e(f.opponentName)} (${f.score}), xG ${f.xg}:${f.xga}">${f.result}</a>`).join('')}
                   </div>
                 </div>
               ` : ''}
@@ -7448,6 +7455,81 @@ async function renderTeamStatsView(container, teamId, opts = {}) {
         </div>
       `}
 
+      <!-- Последние матчи команды -->
+      <div class="panel" id="ts_recent_matches_panel" style="margin-bottom:16px">
+        <div class="row sp" style="margin-bottom:${TEAM_STATS_STATE.recentMatchesOpen ? '10px' : '0'};flex-wrap:wrap;gap:8px;align-items:center">
+          <div>
+            <h3 style="margin:0;font-size:15.5px;display:flex;align-items:center;gap:6px">
+              <span>📋</span>
+              <span>Последние матчи команды${isFallbackMatches ? ' (все турниры)' : ''} (${displayMatches.length})</span>
+            </h3>
+            ${displayMatches.length ? `<div class="muted small">Нажмите на любой матч, чтобы открыть протокол, статистику и оценки игроков</div>` : ''}
+          </div>
+          ${displayMatches.length ? `
+            <div class="row" style="gap:6px;flex-wrap:wrap">
+              ${displayMatches.length > 6 && TEAM_STATS_STATE.recentMatchesOpen ? `<button type="button" class="btn alt sm" id="ts_recent_show_all">${TEAM_STATS_STATE.recentMatchesAll ? 'Показать последние 6' : `Показать все (${displayMatches.length})`}</button>` : ''}
+              <button type="button" class="btn alt sm" id="ts_recent_collapse_btn">${TEAM_STATS_STATE.recentMatchesOpen ? 'Свернуть' : 'Открыть список'}</button>
+            </div>
+          ` : ''}
+        </div>
+        ${TEAM_STATS_STATE.recentMatchesOpen ? (displayMatches.length ? `
+          <div class="wrap" style="border:1px solid var(--line);border-radius:8px;max-height:360px;overflow:auto">
+            <table style="font-size:12.5px;width:100%">
+              <thead>
+                <tr>
+                  <th class="l">Дата / Турнир</th>
+                  <th class="l">Матч</th>
+                  <th>xG</th>
+                  <th>Исход</th>
+                  <th style="width:120px"></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(TEAM_STATS_STATE.recentMatchesAll ? displayMatches : displayMatches.slice(0, 6)).map(m => {
+                  const resBadge = m.result === 'W'
+                    ? '<span class="tag sm" style="background:#dcfce7;color:#15803d;font-weight:700">Победа</span>'
+                    : (m.result === 'D'
+                      ? '<span class="tag sm" style="background:#fef3c7;color:#92400e;font-weight:700">Ничья</span>'
+                      : '<span class="tag sm" style="background:#fee2e2;color:#b91c1c;font-weight:700">Поражение</span>');
+                  const scoreCol = m.result === 'W' ? '#15803d' : (m.result === 'D' ? '#92400e' : '#b91c1c');
+                  const hName = m.homeName || (m.isHome ? team.name : m.opponentName) || 'Хозяева';
+                  const aName = m.awayName || (!m.isHome ? team.name : m.opponentName) || 'Гости';
+                  const hLogo = m.homeLogo || (m.isHome ? tLogo : m.opponentLogo) || '';
+                  const aLogo = m.awayLogo || (!m.isHome ? tLogo : m.opponentLogo) || '';
+                  const hgVal = m.hg != null ? m.hg : (m.isHome ? m.gf : m.ga);
+                  const agVal = m.ag != null ? m.ag : (!m.isHome ? m.gf : m.ga);
+                  const xgDisplay = (m.homeXg != null && m.awayXg != null) ? `${Number(m.homeXg).toFixed(2)} : ${Number(m.awayXg).toFixed(2)}` : `${m.xg} : ${m.xga}`;
+                  return `<tr>
+                    <td class="l" style="white-space:nowrap">
+                      <div style="font-weight:600">${e(m.date ? fmtD(m.date) : '—')}${m.time ? ` <span class="muted small">${e(m.time)}</span>` : ''}</div>
+                      <div class="muted" style="font-size:11px">${e(m.compName || compName(m.comp))}${m.label ? ` · ${e(m.label)}` : ''}</div>
+                    </td>
+                    <td class="l" style="white-space:normal;min-width:230px">
+                      <a href="#/match/${e(m.id)}" data-ts-match-link style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap">
+                        <span style="display:inline-flex;align-items:center;gap:4px;${m.isHome && !m.intraSquad ? 'font-weight:700' : ''}">
+                          ${hLogo ? `<img class="t-logo" src="${hLogo}" alt="" style="width:18px;height:18px"/>` : ''}
+                          <span>${e(hName)}</span>
+                        </span>
+                        <span class="tag sm" style="background:#f8fafc;color:${scoreCol};font-weight:800">${hgVal} : ${agVal}</span>
+                        <span style="display:inline-flex;align-items:center;gap:4px;${!m.isHome && !m.intraSquad ? 'font-weight:700' : ''}">
+                          ${aLogo ? `<img class="t-logo" src="${aLogo}" alt="" style="width:18px;height:18px"/>` : ''}
+                          <span>${e(aName)}</span>
+                        </span>
+                      </a>
+                    </td>
+                    <td class="muted small" style="white-space:nowrap">${xgDisplay}</td>
+                    <td>${resBadge}</td>
+                    <td style="text-align:right;white-space:nowrap">
+                      <a href="#/match/${e(m.id)}" data-ts-match-link class="btn alt sm" style="text-decoration:none">Открыть →</a>
+                    </td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : '<div class="empty">Завершённых матчей у команды пока нет.</div>') : ''}
+      </div>
+
       <!-- Подробная таблица статистики игроков -->
       <div class="panel">
         <div class="row sp" style="margin-bottom:12px;flex-wrap:wrap;gap:10px;align-items:center">
@@ -7600,6 +7682,42 @@ async function renderTeamStatsView(container, teamId, opts = {}) {
   const closeBtn = container.querySelector('#ts_close_modal_btn');
   if (closeBtn && onClose) {
     closeBtn.onclick = onClose;
+  }
+
+  container.querySelectorAll('[data-ts-match-link]').forEach(a => {
+    a.addEventListener('click', () => {
+      if (isModal && onClose) onClose();
+    });
+  });
+
+  const toggleRecentBtn = container.querySelector('#ts_toggle_recent_matches_btn');
+  if (toggleRecentBtn) {
+    toggleRecentBtn.onclick = () => {
+      if (!TEAM_STATS_STATE.recentMatchesOpen) {
+        TEAM_STATS_STATE.recentMatchesOpen = true;
+        renderTeamStatsView(container, teamId, opts).then(() => {
+          container.querySelector('#ts_recent_matches_panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      } else {
+        container.querySelector('#ts_recent_matches_panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+  }
+
+  const recentCollapseBtn = container.querySelector('#ts_recent_collapse_btn');
+  if (recentCollapseBtn) {
+    recentCollapseBtn.onclick = () => {
+      TEAM_STATS_STATE.recentMatchesOpen = !TEAM_STATS_STATE.recentMatchesOpen;
+      renderTeamStatsView(container, teamId, opts);
+    };
+  }
+
+  const recentShowAllBtn = container.querySelector('#ts_recent_show_all');
+  if (recentShowAllBtn) {
+    recentShowAllBtn.onclick = () => {
+      TEAM_STATS_STATE.recentMatchesAll = !TEAM_STATS_STATE.recentMatchesAll;
+      renderTeamStatsView(container, teamId, opts);
+    };
   }
 }
 

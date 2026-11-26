@@ -21368,22 +21368,38 @@ async function getTeamStats(teamId, query) {
     } else {
       loc.l++;
     }
+    const hg = typeof f.hg === "number" ? f.hg : (typeof f.homeScore === "number" ? f.homeScore : Number(stT.home?.g || 0));
+    const ag = typeof f.ag === "number" ? f.ag : (typeof f.awayScore === "number" ? f.awayScore : Number(stT.away?.g || 0));
     formList.push({
       id: f.id,
       date: f.date,
       time: f.time,
       comp: f.comp,
+      compName: compName(f),
       round: f.round,
+      label: f.label || roundLabel(f) || "",
+      season: f.season || S(),
       isHome,
+      intraSquad: isIntraSquad(f),
+      homeId: f.home,
+      awayId: f.away,
+      homeName: sideDisplayName(f, "home"),
+      awayName: sideDisplayName(f, "away"),
+      homeLogo: teamLogo(f.home),
+      awayLogo: teamLogo(f.away),
       opponentId: oppId,
       opponentName: tn(oppId),
       opponentLogo: teamLogo(oppId),
+      hg,
+      ag,
       score: `${gf}:${ga}`,
       gf,
       ga,
       result,
       xg: mXg.toFixed(2),
-      xga: mXga.toFixed(2)
+      xga: mXga.toFixed(2),
+      homeXg: +(stT.home?.xg || 0).toFixed(2),
+      awayXg: +(stT.away?.xg || 0).toFixed(2)
     });
   }
   const points = wins * 3 + draws;
@@ -21535,6 +21551,56 @@ async function getTeamStats(teamId, query) {
   const topGA = playersList.filter((p) => p.ga > 0).sort((a, b) => b.ga - a.ga || b.min - a.min)[0] || null;
   const topMinutes = playersList.filter((p) => p.min > 0).sort((a, b) => b.min - a.min)[0] || null;
   const bestGk = playersList.filter((p) => p.pos === "\u0412\u0420" && (p.sv > 0 || p.cs > 0 || p.m > 0)).sort((a, b) => b.cs * 5 + b.sv - (a.cs * 5 + a.sv))[0] || null;
+  const mapLatestFx = (f: any) => {
+    const isHome = f.home === teamId;
+    const side = isHome ? "home" : "away";
+    const oppSide = isHome ? "away" : "home";
+    const oppId = isHome ? f.away : f.home;
+    const stT = f.st?.teams || {};
+    const myStats = stT[side] || {};
+    const oppStats = stT[oppSide] || {};
+    const gf = typeof f.hg === "number" ? (isHome ? f.hg : f.ag) : (typeof f.homeScore === "number" ? (isHome ? f.homeScore : f.awayScore) : (myStats.g || 0));
+    const ga = typeof f.ag === "number" ? (isHome ? f.ag : f.hg) : (typeof f.awayScore === "number" ? (isHome ? f.awayScore : f.homeScore) : (oppStats.g || 0));
+    const hg = typeof f.hg === "number" ? f.hg : (typeof f.homeScore === "number" ? f.homeScore : Number(stT.home?.g || 0));
+    const ag = typeof f.ag === "number" ? f.ag : (typeof f.awayScore === "number" ? f.awayScore : Number(stT.away?.g || 0));
+    const result = gf > ga ? "W" : (gf < ga ? "L" : "D");
+    return {
+      id: f.id,
+      date: f.date,
+      time: f.time,
+      comp: f.comp,
+      compName: compName(f),
+      round: f.round,
+      label: f.label || roundLabel(f) || "",
+      season: f.season || S(),
+      isHome,
+      intraSquad: isIntraSquad(f),
+      homeId: f.home,
+      awayId: f.away,
+      homeName: sideDisplayName(f, "home"),
+      awayName: sideDisplayName(f, "away"),
+      homeLogo: teamLogo(f.home),
+      awayLogo: teamLogo(f.away),
+      opponentId: oppId,
+      opponentName: tn(oppId),
+      opponentLogo: teamLogo(oppId),
+      hg,
+      ag,
+      score: `${gf}:${ga}`,
+      gf,
+      ga,
+      result,
+      xg: (+(myStats.xg || 0)).toFixed(2),
+      xga: (+(oppStats.xg || 0)).toFixed(2),
+      homeXg: +(stT.home?.xg || 0).toFixed(2),
+      awayXg: +(stT.away?.xg || 0).toFixed(2)
+    };
+  };
+  const recentMatches = [...formList].reverse().slice(0, 20);
+  const latestTeamMatches = [...allTeamDoneFx]
+    .sort((a, b) => (String(b.date || "") + String(b.time || "")).localeCompare(String(a.date || "") + String(a.time || "")))
+    .slice(0, 15)
+    .map(mapLatestFx);
   return {
     team: pubTeam(t),
     period,
@@ -21588,6 +21654,8 @@ async function getTeamStats(teamId, query) {
       recentForm: formList.slice(-6).reverse(),
       allMatchesCount: allTeamDoneFx.length
     },
+    recentMatches,
+    latestTeamMatches,
     players: playersList,
     leaders: {
       topScorer,
