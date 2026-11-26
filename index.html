@@ -18998,6 +18998,7 @@ let NT_VIEW_STAGE = null;
 let NT_SORT = 'pos';
 let NT_SORT_DIR = 'asc';
 let NT_ADD_QUERY = '';
+let NT_PUB_TARGET = 'channel';
 const NT_POS_ORDER = {
   ВР: 0,
   ЛЗ: 1, ЛФЗ: 2, ЦЗ: 3, ПЗ: 4, ПФЗ: 5,
@@ -19162,6 +19163,7 @@ async function pgNational(app, subTeam) {
           <div class="row" style="gap:6px;flex-wrap:wrap">
             <button class="btn ${activeStage === 'extended' ? '' : 'alt'} sm" data-nt-stage="extended">Расширенный состав (${(cur.extendedPlayers || []).length})</button>
             <button class="btn ${activeStage === 'final' ? '' : 'alt'} sm" data-nt-stage="final">Кого вызвали (${(cur.finalPlayers || []).length})</button>
+            ${isAdmin ? `<button type="button" class="btn sm" id="nt_pub_active" style="background:#0284c7;color:#fff" ${activeList.length ? '' : 'disabled'} title="Отправить открытый сейчас состав в Telegram">📢 Опубликовать в ТГ</button>` : ''}
           </div>
         </div>
         ${activeList.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
@@ -19188,6 +19190,18 @@ async function pgNational(app, subTeam) {
           <button class="btn" id="nt_gen_ext">Сформировать расширенный (40) ИИ</button>
           <button class="btn" id="nt_gen_fin">Сформировать итоговый (25) ИИ</button>
           <button class="btn alt" id="nt_arch_btn">В архив</button>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 12px;background:rgba(2,132,199,0.08);border:1px solid rgba(2,132,199,0.28);border-radius:8px">
+          <span class="small" style="font-weight:700;color:#0369a1">📢 Публикация состава в Telegram:</span>
+          <select id="nt_pub_target" style="width:auto;min-width:190px;padding:6px 10px;font-size:13px">
+            <option value="channel"${NT_PUB_TARGET === 'channel' ? ' selected' : ''}>В Telegram-канал</option>
+            <option value="channel_and_bot"${NT_PUB_TARGET === 'channel_and_bot' ? ' selected' : ''}>В канал и всем в бот</option>
+            <option value="bot_all"${NT_PUB_TARGET === 'bot_all' ? ' selected' : ''}>Всем пользователям в бот</option>
+          </select>
+          <button type="button" class="btn sm" id="nt_pub_ext" style="background:#0284c7;color:#fff" ${(cur.extendedPlayers || []).length ? '' : 'disabled'}>Расширенный (${(cur.extendedPlayers || []).length})</button>
+          <button type="button" class="btn sm" id="nt_pub_fin" style="background:#0284c7;color:#fff" ${(cur.finalPlayers || []).length ? '' : 'disabled'}>Кого вызвали (${(cur.finalPlayers || []).length})</button>
+          <button type="button" class="btn alt sm" id="nt_pub_both" ${((cur.extendedPlayers || []).length && (cur.finalPlayers || []).length) ? '' : 'disabled'}>Оба состава сразу</button>
+          ${cur.lastPublishedTelegram?.at ? `<span class="small muted" style="margin-left:auto">Опубликовано: ${e(new Date(cur.lastPublishedTelegram.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }))} МСК</span>` : ''}
         </div>
         <div style="margin-bottom:12px">
           <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px">
@@ -19314,6 +19328,38 @@ async function pgNational(app, subTeam) {
     const r = await act(() => api('/admin/national/generate', { team: NT_TEAM, stage: 'final', title: $('#nt_title').value }), 'Итоговый состав (25) сформирован');
     if (r) pgNational(app);
   };
+  if ($('#nt_pub_target')) $('#nt_pub_target').onchange = (ev) => {
+    NT_PUB_TARGET = ev.target.value || 'channel';
+  };
+  const publishNationalToTg = async (mode, btnEl) => {
+    if (!btnEl || btnEl.disabled) return;
+    const prevTxt = btnEl.textContent;
+    const allPubBtns = ['#nt_pub_active', '#nt_pub_ext', '#nt_pub_fin', '#nt_pub_both'].map(sel => $(sel)).filter(Boolean);
+    allPubBtns.forEach(b => { b.disabled = true; });
+    btnEl.textContent = 'Отправка…';
+    try {
+      const target = $('#nt_pub_target')?.value || NT_PUB_TARGET || 'channel';
+      NT_PUB_TARGET = target;
+      const title = $('#nt_title')?.value?.trim() || '';
+      const r = await act(
+        () => api('/admin/national/publish-telegram', { team: NT_TEAM, mode, target, title }),
+        (res) => res?.message || 'Состав опубликован в Telegram'
+      );
+      if (r) {
+        pgNational(app);
+        return;
+      }
+    } finally {
+      if (document.body.contains(btnEl)) {
+        btnEl.textContent = prevTxt;
+        pgNational(app);
+      }
+    }
+  };
+  if ($('#nt_pub_active')) $('#nt_pub_active').onclick = () => publishNationalToTg(activeStage === 'final' ? 'final' : 'extended', $('#nt_pub_active'));
+  if ($('#nt_pub_ext')) $('#nt_pub_ext').onclick = () => publishNationalToTg('extended', $('#nt_pub_ext'));
+  if ($('#nt_pub_fin')) $('#nt_pub_fin').onclick = () => publishNationalToTg('final', $('#nt_pub_fin'));
+  if ($('#nt_pub_both')) $('#nt_pub_both').onclick = () => publishNationalToTg('both', $('#nt_pub_both'));
   if ($('#nt_add_search') && $('#nt_add_pid')) {
     const searchEl = $('#nt_add_search');
     const selEl = $('#nt_add_pid');

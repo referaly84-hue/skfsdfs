@@ -29669,6 +29669,199 @@ app.post("/api/admin/national/archive", admin, (req, res) => {
   save();
   res.json({ ok: 1, team: teamType });
 });
+function buildNationalSquadTelegramMessages(
+  enriched: any,
+  teamType: "main" | "u21",
+  mode: "extended" | "final" | "both"
+): string[] {
+  const isU21 = teamType === "u21";
+  const teamHeader = isU21 ? "🇷🇺 <b>МОЛОДЁЖНАЯ СБОРНАЯ РОССИИ U21</b>" : "🇷🇺 <b>СБОРНАЯ РОССИИ</b>";
+  const teamShort = isU21 ? "Россия U21" : "Россия";
+  const titleStr = esc(String(enriched?.title || (isU21 ? "Сбор молодёжной сборной U21" : "Сбор национальной команды")).trim());
+  const matches: any[] = Array.isArray(enriched?.matches) ? enriched.matches : [];
+  const matchesBlock = matches.length
+    ? "\n\n📅 <b>Товарищеские матчи:</b>\n" + matches.map((m) => {
+      const gDate = m.gameDate || m.date || "";
+      const gTime = m.gameTime || m.time || "19:00";
+      const pair = m.home !== false
+        ? `${esc(teamShort)} — ${esc(m.opponent || "Соперник")}`
+        : `${esc(m.opponent || "Соперник")} — ${esc(teamShort)}`;
+      return `• ${pair} (${esc(ruDateStr(gDate))} ${esc(gTime)})`;
+    }).join("\n")
+    : "";
+  const rawSiteUrl = String(db?.settings?.siteUrl || "").trim().replace(/\/+$/, "");
+  const siteLink = rawSiteUrl ? `\n\n🔗 <a href="${esc(rawSiteUrl)}/#/${isU21 ? "national/u21" : "national"}">Открыть состав сборной на сайте</a>` : "";
+
+  const posGroups: Array<{ icon: string; label: string; poses: Set<string> }> = [
+    { icon: "🧤", label: "Вратари", poses: new Set(["ВР"]) },
+    { icon: "🛡", label: "Защитники", poses: new Set(["ЛЗ", "ЛФЗ", "ЦЗ", "ПЗ", "ПФЗ"]) },
+    { icon: "⚙️", label: "Полузащитники", poses: new Set(["ОП", "ЛП", "ЦП", "ПП", "АП"]) },
+    { icon: "⚽", label: "Нападающие", poses: new Set(["ЛВ", "ЦФ", "СТ", "ПВ"]) },
+  ];
+
+  const formatSection = (list: any[], stageTitle: string): string => {
+    const sorted = [...(Array.isArray(list) ? list : [])].sort(compareNationalPlayersPosClubAge);
+    const lines: string[] = [`${stageTitle} <b>(${sorted.length})</b>`];
+    const usedIds = new Set<string>();
+    let num = 1;
+    for (const grp of posGroups) {
+      const chunk = sorted.filter((p) => grp.poses.has(String(p?.pos || "")));
+      if (!chunk.length) continue;
+      lines.push("");
+      lines.push(`${grp.icon} <b>${grp.label} (${chunk.length}):</b>`);
+      for (const p of chunk) {
+        usedIds.add(String(p.id));
+        const abroadMark = p.isAbroad ? " 🌍" : "";
+        lines.push(`${num++}. <b>${esc(p.name)}</b> (${esc(p.pos || "—")}) — ${esc(p.teamName || "—")}${abroadMark}`);
+      }
+    }
+    const rest = sorted.filter((p) => !usedIds.has(String(p.id)));
+    if (rest.length) {
+      lines.push("");
+      lines.push(`🔹 <b>Другие (${rest.length}):</b>`);
+      for (const p of rest) {
+        const abroadMark = p.isAbroad ? " 🌍" : "";
+        lines.push(`${num++}. <b>${esc(p.name)}</b> (${esc(p.pos || "—")}) — ${esc(p.teamName || "—")}${abroadMark}`);
+      }
+    }
+    return lines.join("\n");
+  };
+
+  const extList = Array.isArray(enriched?.extendedPlayers) ? enriched.extendedPlayers : [];
+  const finList = Array.isArray(enriched?.finalPlayers) ? enriched.finalPlayers : [];
+
+  if (mode === "extended") {
+    return [`${teamHeader}\n🏆 <b>${titleStr}</b>${matchesBlock}\n\n${formatSection(extList, "📋 <b>РАСШИРЕННЫЙ СОСТАВ</b>")}${siteLink}`];
+  }
+  if (mode === "final") {
+    return [`${teamHeader}\n🏆 <b>${titleStr}</b>${matchesBlock}\n\n${formatSection(finList, "✅ <b>ИТОГОВЫЙ СОСТАВ (КОГО ВЫЗВАЛИ)</b>")}${siteLink}`];
+  }
+
+  const extSec = formatSection(extList, "📋 <b>РАСШИРЕННЫЙ СОСТАВ</b>");
+  const finSec = formatSection(finList, "✅ <b>ИТОГОВЫЙ СОСТАВ (КОГО ВЫЗВАЛИ)</b>");
+  const combined = `${teamHeader}\n🏆 <b>${titleStr}</b>${matchesBlock}\n\n${extSec}\n\n${finSec}${siteLink}`;
+  if (combined.length <= 3700) {
+    return [combined];
+  }
+  return [
+    `${teamHeader}\n🏆 <b>${titleStr}</b>${matchesBlock}\n\n${extSec}`,
+    `${teamHeader}\n🏆 <b>${titleStr}</b>\n\n${finSec}${siteLink}`
+  ];
+}
+app.post("/api/admin/national/publish-telegram", admin, async (req, res) => {
+  const token = tgToken();
+  if (!token) {
+    return fail(res, "Токен Telegram-бота не настроен. Укажите его во вкладке «Настройки».");
+  }
+  const teamType = normalizeNationalTeamType(req.body?.team);
+  const rawMode = String(req.body?.mode || "extended").trim().toLowerCase();
+  const mode: "extended" | "final" | "both" = rawMode === "final" ? "final" : rawMode === "both" ? "both" : "extended";
+  const rawTarget = String(req.body?.target || "channel").trim().toLowerCase();
+  const target: "channel" | "bot_all" | "channel_and_bot" =
+    rawTarget === "bot_all" ? "bot_all" : rawTarget === "channel_and_bot" ? "channel_and_bot" : "channel";
+
+  const nt = ensureNationalTeam(teamType);
+  if (typeof req.body?.title === "string" && req.body.title.trim()) {
+    nt.current.title = req.body.title.trim().slice(0, 160);
+  }
+  const enriched = enrichNationalBreak(nt.current, teamType);
+  const extCount = Array.isArray(enriched.extendedPlayers) ? enriched.extendedPlayers.length : 0;
+  const finCount = Array.isArray(enriched.finalPlayers) ? enriched.finalPlayers.length : 0;
+
+  if (mode === "extended" && extCount === 0) {
+    return fail(res, "Расширенный состав пуст — сначала сформируйте или добавьте игроков.");
+  }
+  if (mode === "final" && finCount === 0) {
+    return fail(res, "Список «Кого вызвали» пуст — сначала сформируйте или добавьте игроков.");
+  }
+  if (mode === "both" && (extCount === 0 || finCount === 0)) {
+    return fail(res, "Чтобы опубликовать оба состава сразу, должны быть заполнены и расширенный, и итоговый списки.");
+  }
+
+  const sendToChannel = target === "channel" || target === "channel_and_bot";
+  const sendToBot = target === "bot_all" || target === "channel_and_bot";
+  const channelChat = normalizeTgChat(tgChat());
+  if (sendToChannel && !channelChat) {
+    return fail(res, "ID Telegram-канала или чата не настроен. Укажите его во вкладке «Настройки» или выберите отправку пользователям в бот.");
+  }
+
+  const recipients = sendToBot ? buildTelegramRecipientsList() : [];
+  if (target === "bot_all" && !recipients.length) {
+    return fail(res, "Нет подключённых пользователей Telegram-бота для рассылки.");
+  }
+
+  const messages = buildNationalSquadTelegramMessages(enriched, teamType, mode);
+  if (!messages.length) {
+    return fail(res, "Не удалось сформировать текст для отправки.");
+  }
+
+  let channelSent = false;
+  if (sendToChannel && channelChat) {
+    for (const msgText of messages) {
+      const r = await sendTelegramDirectMessage(token, channelChat, msgText, "HTML");
+      if (!r.ok) {
+        tgLastStatus = { ok: false, status: 400, error: r.rawError || r.error, at: (new Date()).toISOString() };
+        return fail(res, `Ошибка отправки в Telegram-канал ${channelChat}: ${r.error || "неизвестная ошибка"}`);
+      }
+    }
+    channelSent = true;
+    tgLastStatus = { ok: true, at: (new Date()).toISOString() };
+  }
+
+  let botSent = 0;
+  let botFailed = 0;
+  if (sendToBot && recipients.length) {
+    for (let i = 0; i < recipients.length; i++) {
+      const rec = recipients[i];
+      let okAll = true;
+      for (const msgText of messages) {
+        const r = await sendTelegramDirectMessage(token, rec.tgId, msgText, "HTML");
+        if (!r.ok) {
+          okAll = false;
+          if (r.blocked && db.telegramUsers?.[`tg_${rec.tgId}`]) {
+            db.telegramUsers[`tg_${rec.tgId}`].blockedBot = true;
+          }
+          break;
+        }
+      }
+      if (okAll) {
+        botSent++;
+        if (db.telegramUsers?.[`tg_${rec.tgId}`]?.blockedBot) {
+          db.telegramUsers[`tg_${rec.tgId}`].blockedBot = false;
+        }
+      } else {
+        botFailed++;
+      }
+      if (i < recipients.length - 1) await sleep(45);
+    }
+    if (target === "bot_all" && botSent === 0 && botFailed > 0) {
+      return fail(res, `Не удалось доставить сообщение ни одному пользователю бота (${botFailed} ошибок).`);
+    }
+  }
+
+  nt.current.lastPublishedTelegram = {
+    at: Date.now(),
+    mode,
+    target
+  };
+  save();
+
+  const modeLabel = mode === "both" ? "Расширенный и итоговый составы" : mode === "final" ? "Итоговый состав (кого вызвали)" : "Расширенный состав";
+  const partsDesc: string[] = [];
+  if (channelSent) partsDesc.push(`в канал ${channelChat}`);
+  if (sendToBot) partsDesc.push(`в бот: доставлено ${botSent} из ${recipients.length}`);
+  res.json({
+    ok: 1,
+    team: teamType,
+    mode,
+    target,
+    channelSent,
+    botSent,
+    botFailed,
+    current: enrichNationalBreak(nt.current, teamType),
+    message: `${modeLabel} опубликованы в Telegram (${partsDesc.join(", ")})!`
+  });
+});
 app.post("/api/admin/friendlies/generate", admin, (req, res) => {
   const yCur = parseInt(String(db.settings?.season || S()).slice(0, 4), 10) || 2026;
   db.internationalBreaks = getSeasonBreaks(yCur);
