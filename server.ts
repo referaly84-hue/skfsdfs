@@ -6881,7 +6881,8 @@ function seed() {
     clubFinesProcessed: {},
     playerMorale: {},
     playerTalks: {},
-    clubActivity: {}
+    clubActivity: {},
+    telegramAdminMessages: []
   };
   for (const [name, city, lat, lon, stadium] of RPL) {
     d.teams.push({ id: uid(), name, comp: "rpl", city, lat, lon, stadium, code: mkCode(), logo: getTeamLogo(name, null, "rpl") });
@@ -24151,8 +24152,15 @@ app.get("/api/admin/participants", admin, (_req, res) => {
   }
 
   const tgLinksByTeam = new Map<string, number>();
-  for (const tid of Object.values(db.telegramClubLinks || {}) as string[]) {
-    if (tid) tgLinksByTeam.set(tid, (tgLinksByTeam.get(tid) || 0) + 1);
+  const primaryTgIdByTeam = new Map<string, string>();
+  for (const [tgKey, tid] of Object.entries(db.telegramClubLinks || {}) as [string, string][]) {
+    if (tid) {
+      tgLinksByTeam.set(tid, (tgLinksByTeam.get(tid) || 0) + 1);
+      if (!primaryTgIdByTeam.has(tid)) {
+        const cleanId = String(tgKey).replace(/^tg_/, "");
+        if (/^\d+$/.test(cleanId)) primaryTgIdByTeam.set(tid, cleanId);
+      }
+    }
   }
 
   const onlineByTeam = new Map<string, { path: string; joinedAt: number; lastPing: number }>();
@@ -24180,7 +24188,8 @@ app.get("/api/admin/participants", admin, (_req, res) => {
     const ownerProf = db.ownerProfiles?.[`club:${t.id}`] || null;
     const ownerName = ownerProf?.customName || ownerProf?.displayName || "";
     const telegramUsername = ownerProf?.telegramUsername || "";
-    const tgLinked = Boolean(ownerProf?.telegramId || (tgLinksByTeam.get(t.id) || 0) > 0);
+    const tgId = String(ownerProf?.telegramId || primaryTgIdByTeam.get(t.id) || "");
+    const tgLinked = Boolean(tgId || (tgLinksByTeam.get(t.id) || 0) > 0);
 
     const teamScheduled = allScheduledSeasonFx
       .filter((f) => f.home === t.id || f.away === t.id)
@@ -24279,6 +24288,7 @@ app.get("/api/admin/participants", admin, (_req, res) => {
       code: t.code || "",
       ownerName: ownerName && ownerName !== t.name ? ownerName : "",
       telegramUsername,
+      tgId,
       tgLinked,
       onlineNow: Boolean(onlineInfo),
       lastPath: onlineInfo?.path || actRec.lastPath || null,
@@ -24706,6 +24716,371 @@ app.post("/api/admin/telegram/send-today", admin, (req, res) => {
     return res.json({ ok: 1, count: digest.count, message: `Отправлено расписание на ${ruDateStr(dateStr)} (${digest.count} матчей)` });
   }
   return res.json({ ok: 1, count: 0, message: `На ${ruDateStr(dateStr)} матчей РПЛ и Кубка России не запланировано` });
+});
+function buildTelegramRecipientsList() {
+  const byId = new Map<string, any>();
+  const ensureRec = (rawId: any) => {
+    const id = String(rawId || "").replace(/^tg_/, "").trim();
+    if (!/^-?\d{4,20}$/.test(id)) return null;
+    let rec = byId.get(id);
+    if (!rec) {
+      rec = {
+        tgId: id,
+        displayName: "",
+        username: "",
+        photoUrl: "",
+        teamId: "",
+        teamName: "",
+        teamLogo: "",
+        compName: "",
+        roleLabel: "Пользователь",
+        blockedBot: false,
+        updatedAt: "",
+        lastSeenAt: null as number | null,
+        source: ""
+      };
+      byId.set(id, rec);
+    }
+    return rec;
+  };
+
+  for (const [key, u] of Object.entries(db.telegramUsers || {}) as [string, any][]) {
+    const rec = ensureRec(u?.tgId || key);
+    if (!rec) continue;
+    if (u?.displayName) rec.displayName = String(u.displayName);
+    if (u?.username) rec.username = String(u.username).replace(/^@/, "");
+    if (u?.photoUrl) rec.photoUrl = String(u.photoUrl);
+    if (u?.blockedBot) rec.blockedBot = true;
+    if (u?.updatedAt) rec.updatedAt = String(u.updatedAt);
+    if (u?.source && !rec.source) rec.source = String(u.source);
+  }
+
+  for (const [key, tid] of Object.entries(db.telegramClubLinks || {}) as [string, string][]) {
+    const rec = ensureRec(key);
+    if (!rec || !tid) continue;
+    const t = team(tid);
+    if (t) {
+      rec.teamId = t.id;
+      rec.teamName = t.name;
+      rec.teamLogo = teamLogo(t.id);
+      rec.compName = compOf(t.comp)?.name || t.comp;
+      rec.roleLabel = "Клуб";
+    }
+  }
+
+  for (const [pkey, prof] of Object.entries(db.ownerProfiles || {}) as [string, any][]) {
+    const tgId = prof?.telegramId;
+    if (!tgId) continue;
+    const rec = ensureRec(tgId);
+    if (!rec) continue;
+    const profName = prof?.customName || prof?.displayName || "";
+    if (profName && (!rec.displayName || pkey.startsWith("club:"))) {
+      if (!rec.displayName) rec.displayName = profName;
+    }
+    if (prof?.telegramUsername && !rec.username) {
+      rec.username = String(prof.telegramUsername).replace(/^@/, "");
+    }
+    if (pkey.startsWith("club:")) {
+      const tid = pkey.slice(5);
+      const t = team(tid);
+      if (t) {
+        rec.teamId = t.id;
+        rec.teamName = t.name;
+        rec.teamLogo = teamLogo(t.id);
+        rec.compName = compOf(t.comp)?.name || t.comp;
+        rec.roleLabel = "Клуб";
+        if (!rec.displayName || rec.displayName === t.name) {
+          rec.displayName = prof?.customName || prof?.displayName || t.name;
+        }
+      }
+    }
+  }
+
+  for (const rec of byId.values()) {
+    if (rec.teamId) {
+      const act = db.clubActivity?.[rec.teamId];
+      if (act?.lastSeenAt) rec.lastSeenAt = Number(act.lastSeenAt);
+    } else if (rec.updatedAt) {
+      const parsed = Date.parse(rec.updatedAt);
+      if (Number.isFinite(parsed)) rec.lastSeenAt = parsed;
+    }
+    if (!rec.displayName) {
+      rec.displayName = rec.username ? `@${rec.username}` : (rec.teamName || `ID ${rec.tgId}`);
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    if (Boolean(b.teamId) !== Boolean(a.teamId)) return Boolean(b.teamId) ? 1 : -1;
+    if ((b.lastSeenAt || 0) !== (a.lastSeenAt || 0)) return (b.lastSeenAt || 0) - (a.lastSeenAt || 0);
+    return String(a.displayName || "").localeCompare(String(b.displayName || ""), "ru");
+  });
+}
+
+async function sendTelegramDirectMessage(token: string, chatId: string, rawText: string, parseMode: "HTML" | "plain" = "HTML") {
+  const chunks = splitTgText(rawText, 3800);
+  if (!chunks.length) return { ok: false, error: "Пустой текст сообщения" };
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  for (const chunk of chunks) {
+    let attempts = 0;
+    let currentParseMode: "HTML" | null = parseMode === "HTML" ? "HTML" : null;
+    while (attempts < 3) {
+      attempts++;
+      const bodyObj: any = {
+        chat_id: chatId,
+        text: chunk,
+        disable_web_page_preview: true
+      };
+      if (currentParseMode) bodyObj.parse_mode = currentParseMode;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(bodyObj),
+        signal: AbortSignal.timeout(15e3)
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data?.ok) break;
+      const desc = String(data?.description || `HTTP ${resp.status}`);
+      if (resp.status === 429 && attempts < 3) {
+        const retrySec = Math.min(8, Math.max(1, Number(data?.parameters?.retry_after || 2)));
+        await sleep(retrySec * 1000);
+        continue;
+      }
+      if (currentParseMode === "HTML" && desc.includes("can't parse entities")) {
+        currentParseMode = null;
+        continue;
+      }
+      const blocked = resp.status === 403 || /blocked by the user|user is deactivated|chat not found|bot can't initiate conversation/i.test(desc);
+      let friendly = desc;
+      if (/blocked by the user/i.test(desc)) friendly = "Пользователь заблокировал бота";
+      else if (/bot can't initiate conversation/i.test(desc)) friendly = "Пользователь ещё не нажал /start в боте";
+      else if (/chat not found/i.test(desc)) friendly = "Чат не найден (пользователь не запускал бота)";
+      else if (/user is deactivated/i.test(desc)) friendly = "Аккаунт Telegram удалён";
+      return { ok: false, error: friendly, blocked, rawError: desc };
+    }
+  }
+  return { ok: true };
+}
+
+app.get("/api/admin/telegram/recipients", admin, (_req, res) => {
+  const recipients = buildTelegramRecipientsList();
+  const linkedTeamIds = new Set(recipients.map((r) => r.teamId).filter(Boolean));
+  const clubsWithoutTg = db.teams
+    .filter((t) => !linkedTeamIds.has(t.id))
+    .map((t) => ({ id: t.id, name: t.name, comp: t.comp, compName: compOf(t.comp)?.name || t.comp }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  res.json({
+    ok: 1,
+    hasBotToken: Boolean(tgToken()),
+    defaultChannel: tgChat(),
+    recipients,
+    clubsWithoutTg,
+    history: Array.isArray(db.telegramAdminMessages) ? db.telegramAdminMessages.slice(0, 30) : []
+  });
+});
+
+app.post("/api/admin/telegram/send-direct", admin, async (req, res) => {
+  const token = tgToken();
+  if (!token) {
+    return fail(res, "Токен Telegram-бота не настроен. Укажите его во вкладке «Настройки» или в secrets.json.");
+  }
+  const text = String(req.body?.text || "").trim();
+  if (!text) return fail(res, "Введите текст сообщения");
+  if (text.length > 8000) return fail(res, "Сообщение слишком длинное (максимум 8000 символов)");
+  const parseMode: "HTML" | "plain" = req.body?.parseMode === "plain" ? "plain" : "HTML";
+  const mode = String(req.body?.mode || "selected").trim();
+
+  const recipients = buildTelegramRecipientsList();
+  const recMap = new Map(recipients.map((r) => [r.tgId, r]));
+  const targets: string[] = [];
+
+  if (mode === "all") {
+    for (const r of recipients) targets.push(r.tgId);
+  } else if (mode === "clubs") {
+    for (const r of recipients) {
+      if (r.teamId) targets.push(r.tgId);
+    }
+  } else if (mode === "custom_id") {
+    const rawId = String(req.body?.customChatId || "").trim();
+    if (!/^-?\d{4,20}$|^@[a-zA-Z0-9_]{4,64}$/.test(rawId)) {
+      return fail(res, "Укажите корректный числовой Telegram ID или @username канала");
+    }
+    targets.push(rawId);
+  } else {
+    const ids = Array.isArray(req.body?.recipientIds) ? req.body.recipientIds : [];
+    for (const raw of ids) {
+      const cid = String(raw || "").replace(/^tg_/, "").trim();
+      if (/^-?\d{4,20}$|^@[a-zA-Z0-9_]{4,64}$/.test(cid) && !targets.includes(cid)) {
+        targets.push(cid);
+      }
+    }
+  }
+
+  if (!targets.length) {
+    return fail(res, "Нет получателей для отправки. Выберите пользователей или дождитесь входа участников через Telegram-бота.");
+  }
+  if (targets.length > 500) {
+    return fail(res, "Слишком много получателей за одну отправку (максимум 500)");
+  }
+
+  let sentCount = 0;
+  let failedCount = 0;
+  const results: Array<{ tgId: string; label: string; ok: boolean; error?: string }> = [];
+
+  for (let i = 0; i < targets.length; i++) {
+    const chatId = targets[i];
+    const rec = recMap.get(chatId);
+    const label = rec ? (rec.teamName ? `${rec.displayName} (${rec.teamName})` : rec.displayName) : chatId;
+    try {
+      const r = await sendTelegramDirectMessage(token, chatId, text, parseMode);
+      if (r.ok) {
+        sentCount++;
+        if (db.telegramUsers?.[`tg_${chatId}`]?.blockedBot) {
+          db.telegramUsers[`tg_${chatId}`].blockedBot = false;
+        }
+        results.push({ tgId: chatId, label, ok: true });
+      } else {
+        failedCount++;
+        if (r.blocked && db.telegramUsers?.[`tg_${chatId}`]) {
+          db.telegramUsers[`tg_${chatId}`].blockedBot = true;
+        }
+        results.push({ tgId: chatId, label, ok: false, error: r.error || "Ошибка доставки" });
+      }
+    } catch (err: any) {
+      failedCount++;
+      results.push({ tgId: chatId, label, ok: false, error: err?.message || "Сетевая ошибка" });
+    }
+    if (i < targets.length - 1) await sleep(45);
+  }
+
+  const targetSummary = mode === "all"
+    ? `Всем пользователям (${targets.length})`
+    : mode === "clubs"
+      ? `Владельцам клубов (${targets.length})`
+      : targets.length === 1
+        ? results[0]?.label || targets[0]
+        : `Выбранным (${targets.length})`;
+
+  const historyEntry = {
+    id: uid(),
+    at: Date.now(),
+    mode,
+    targetCount: targets.length,
+    sentCount,
+    failedCount,
+    targetSummary,
+    text: text.slice(0, 600),
+    results: results.slice(0, 50)
+  };
+  db.telegramAdminMessages ||= [];
+  db.telegramAdminMessages.unshift(historyEntry);
+  if (db.telegramAdminMessages.length > 100) db.telegramAdminMessages.length = 100;
+  save();
+
+  res.json({
+    ok: 1,
+    sentCount,
+    failedCount,
+    totalTargets: targets.length,
+    results,
+    historyEntry
+  });
+});
+
+app.post("/api/admin/telegram/link-club", admin, (req, res) => {
+  const tgId = String(req.body?.tgId || "").replace(/^tg_/, "").trim();
+  const teamId = String(req.body?.teamId || "").trim();
+  const username = String(req.body?.username || "").replace(/^@/, "").trim();
+  const displayName = String(req.body?.displayName || "").trim();
+  if (!/^\d{5,20}$/.test(tgId)) {
+    return fail(res, "Укажите корректный числовой Telegram ID (только цифры)");
+  }
+  const tgKey = `tg_${tgId}`;
+  db.telegramUsers ||= {};
+  const existingU = db.telegramUsers[tgKey] || {};
+  db.telegramUsers[tgKey] = {
+    tgId,
+    displayName: displayName || existingU.displayName || (username ? `@${username}` : `ID ${tgId}`),
+    username: username || existingU.username || "",
+    photoUrl: existingU.photoUrl || "",
+    verified: existingU.verified || false,
+    blockedBot: false,
+    source: existingU.source || "manual",
+    updatedAt: new Date().toISOString()
+  };
+
+  db.telegramClubLinks ||= {};
+  if (teamId) {
+    const t = team(teamId);
+    if (!t) return fail(res, "Клуб не найден");
+    db.telegramClubLinks[tgKey] = t.id;
+    ensureOwnerProfile(getAdsCtx(), `club:${t.id}`, displayName || db.telegramUsers[tgKey].displayName, "", {
+      tgId,
+      username: db.telegramUsers[tgKey].username
+    });
+  } else {
+    delete db.telegramClubLinks[tgKey];
+  }
+  save();
+  res.json({ ok: 1, recipients: buildTelegramRecipientsList() });
+});
+
+app.post("/api/admin/telegram/sync-bot-users", admin, async (_req, res) => {
+  const token = tgToken();
+  if (!token) {
+    return fail(res, "Токен Telegram-бота не настроен.");
+  }
+  try {
+    const url = `https://api.telegram.org/bot${token}/getUpdates?limit=100&timeout=0`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(12e3) });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.ok) {
+      const desc = String(data?.description || `HTTP ${resp.status}`);
+      if (resp.status === 409 || /webhook/i.test(desc)) {
+        return fail(res, "У бота активен webhook — getUpdates недоступен. Новые пользователи автоматически добавляются при открытии Mini App в боте или вручную по Telegram ID.");
+      }
+      return fail(res, `Ошибка Telegram API: ${desc}`);
+    }
+    const updates = Array.isArray(data.result) ? data.result : [];
+    db.telegramUsers ||= {};
+    let added = 0;
+    let updated = 0;
+    const seenIds = new Set<string>();
+    for (const upd of updates) {
+      const msg = upd?.message || upd?.edited_message || upd?.callback_query?.message || upd?.my_chat_member;
+      const from = upd?.callback_query?.from || msg?.from || upd?.my_chat_member?.from;
+      const chat = msg?.chat || upd?.my_chat_member?.chat;
+      if (!from || from.is_bot) continue;
+      if (chat && chat.type !== "private") continue;
+      const idStr = String(from.id || "");
+      if (!/^\d{4,20}$/.test(idStr)) continue;
+      seenIds.add(idStr);
+      const tgKey = `tg_${idStr}`;
+      const fullName = [from.first_name, from.last_name].filter(Boolean).join(" ").trim() || from.username || `User ${idStr}`;
+      const existed = Boolean(db.telegramUsers[tgKey]);
+      db.telegramUsers[tgKey] = {
+        ...(db.telegramUsers[tgKey] || {}),
+        tgId: idStr,
+        displayName: fullName,
+        username: from.username || db.telegramUsers[tgKey]?.username || "",
+        blockedBot: false,
+        source: db.telegramUsers[tgKey]?.source || "bot_updates",
+        updatedAt: new Date().toISOString()
+      };
+      if (existed) updated++;
+      else added++;
+    }
+    if (added || updated) save();
+    res.json({
+      ok: 1,
+      updatesChecked: updates.length,
+      usersFound: seenIds.size,
+      added,
+      updated,
+      recipients: buildTelegramRecipientsList()
+    });
+  } catch (err: any) {
+    return fail(res, `Сетевая ошибка при обращении к Telegram: ${err?.message || "неизвестно"}`);
+  }
 });
 app.post("/api/admin/season", admin, (req, res) => {
   let start = String(req.body.start || "");

@@ -12858,6 +12858,9 @@ function intraLineupForm(box, f, c, withT, app) {
 let AT = 'matches', AF = { comp: 'rpl', round: '' }, ADM_TRQ_TAB = 'pending', ADM_RPL_TR_TAB = 'pending', ADMIN_RENDER_SEQ = 0, AC_FILT = 'all', AP_TEAM_FILT = '', AP_QUERY = '';
 let PART_COMP = 'all', PART_STATUS = 'all', PART_Q = '', PART_SORT = 'league', PART_ONLY_CODES = false;
 const PART_EXPANDED = new Set();
+let BOT_MSG_MODE = 'all', BOT_MSG_Q = '', BOT_MSG_PARSE = 'HTML', BOT_MSG_TEXT = '', BOT_MSG_CUSTOM_ID = '';
+let BOT_MSG_LINK_TEAM = '', BOT_MSG_LAST_RES = null;
+const BOT_MSG_SEL = new Set();
 async function pgAdmin(app) {
   if (S.me?.role !== 'admin') return location.hash = '#/login';
   const renderSeq = ++ADMIN_RENDER_SEQ;
@@ -12874,6 +12877,7 @@ async function pgAdmin(app) {
     ['tournaments', 'Турниры'],
     ['clubs', 'Клубы и логотипы'],
     ['participants', '👥 Участники'],
+    ['bot_msg', '✉️ Рассылка в бот'],
     ['players', 'Игроки'],
     ['derbies', 'Дерби'],
     ['internal', 'Внутренний турнир'],
@@ -12891,6 +12895,87 @@ async function pgAdmin(app) {
   app.querySelectorAll('[data-a]').forEach(b => b.onclick = () => { AT = b.dataset.a; pgAdmin(app); });
   const ab = $('#ab'), re = () => pgAdmin(app);
   if (!ab) return;
+
+  const openQuickBotMsgModal = (target) => {
+    const tgId = String(target?.tgId || '').trim();
+    if (!tgId) return toast('У этого участника не привязан Telegram ID', true);
+    const titleLabel = target.teamName ? `${target.teamName}${target.label ? ` · ${target.label}` : ''}` : (target.label || `ID ${tgId}`);
+    modal(`
+      <div style="max-width:520px;padding:4px">
+        <div class="row sp" style="margin-bottom:10px;gap:8px;align-items:flex-start">
+          <div>
+            <h3 style="margin:0;font-size:17px">✉️ Сообщение в Telegram-бот</h3>
+            <div class="small muted" style="margin-top:3px">
+              Получатель: <b>${e(titleLabel)}</b>
+              ${target.username ? ` · <span>@${e(target.username)}</span>` : ''}
+              · <code>ID ${e(tgId)}</code>
+            </div>
+          </div>
+          <button type="button" class="btn alt sm" id="qbm_close_x">✕</button>
+        </div>
+        <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+          <label class="small" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin:0">
+            <input type="radio" name="qbm_parse" value="HTML" checked style="width:auto"> HTML (&lt;b&gt;, &lt;i&gt;, &lt;code&gt;)
+          </label>
+          <label class="small" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin:0">
+            <input type="radio" name="qbm_parse" value="plain" style="width:auto"> Обычный текст
+          </label>
+        </div>
+        <textarea id="qbm_text" rows="6" maxlength="8000" placeholder="Введите текст сообщения для отправки пользователю в личку от имени бота..." style="width:100%;font-size:14px;line-height:1.45"></textarea>
+        <div id="qbm_err" class="small" style="color:#b91c1c;margin-top:6px;display:none"></div>
+        <div class="row sp" style="margin-top:12px;gap:8px;flex-wrap:wrap">
+          <span class="small muted" id="qbm_cnt">0 / 8000</span>
+          <div class="row" style="gap:8px">
+            <button type="button" class="btn alt" id="qbm_cancel">Отмена</button>
+            <button type="button" class="btn" id="qbm_send" style="background:#0284c7;color:#fff;font-weight:700">📨 Отправить в бот</button>
+          </div>
+        </div>
+      </div>
+    `, mEl => {
+      const ta = mEl.querySelector('#qbm_text');
+      const cnt = mEl.querySelector('#qbm_cnt');
+      const errEl = mEl.querySelector('#qbm_err');
+      const closeBtn = () => mEl.remove();
+      mEl.querySelector('#qbm_close_x').onclick = closeBtn;
+      mEl.querySelector('#qbm_cancel').onclick = closeBtn;
+      if (ta) {
+        ta.oninput = () => { if (cnt) cnt.textContent = `${ta.value.length} / 8000`; };
+        setTimeout(() => ta.focus(), 40);
+      }
+      mEl.querySelector('#qbm_send').onclick = async (ev) => {
+        const btn = ev.currentTarget;
+        const text = String(ta?.value || '').trim();
+        if (!text) {
+          if (errEl) { errEl.textContent = 'Введите текст сообщения'; errEl.style.display = 'block'; }
+          return;
+        }
+        const parseMode = mEl.querySelector('input[name="qbm_parse"]:checked')?.value === 'plain' ? 'plain' : 'HTML';
+        if (errEl) errEl.style.display = 'none';
+        btn.disabled = true;
+        const prevTxt = btn.textContent;
+        btn.textContent = 'Отправка...';
+        try {
+          const res = await api('/admin/telegram/send-direct', {
+            method: 'POST',
+            body: JSON.stringify({ mode: 'selected', recipientIds: [tgId], text, parseMode })
+          });
+          if (res.sentCount > 0) {
+            toast(`Сообщение доставлено: ${titleLabel}`);
+            mEl.remove();
+          } else {
+            const reason = res.results?.[0]?.error || 'Не удалось доставить сообщение';
+            if (errEl) { errEl.textContent = reason; errEl.style.display = 'block'; }
+            btn.disabled = false;
+            btn.textContent = prevTxt;
+          }
+        } catch (err) {
+          if (errEl) { errEl.textContent = err.message || 'Ошибка отправки'; errEl.style.display = 'block'; }
+          btn.disabled = false;
+          btn.textContent = prevTxt;
+        }
+      };
+    });
+  };
 
   if (!ov.keys.gemini && !ov.keys.mistral && !ov.keys.openrouter) {
     ab.insertAdjacentHTML('beforebegin', '<div class="warn" style="margin-bottom:12px">Ключей нейросети нет: матчи идут на запасном генераторе, карточки игроков пустые. Добавьте ключ во вкладке «Настройки».</div>');
@@ -13986,6 +14071,9 @@ async function pgAdmin(app) {
             </td>
             <td style="text-align:right;white-space:nowrap">
               <div class="row" style="gap:4px;justify-content:flex-end;flex-wrap:wrap">
+                ${p.tgId
+                  ? `<button type="button" class="btn sm" data-part-msg="${e(p.tgId)}" data-part-label="${e(p.ownerName || '')}" data-part-user="${e(p.telegramUsername || '')}" data-part-team="${e(p.name)}" style="background:#0284c7;color:#fff" title="Отправить личное сообщение в Telegram-бот">✉️ В бот</button>`
+                  : `<button type="button" class="btn alt sm" data-part-link-tg="${e(p.id)}" title="Привязать Telegram ID этого участника">+ TG</button>`}
                 ${p.totalScheduled ? `<button type="button" class="btn alt sm" data-part-expand="${p.id}">${isExpanded ? 'Скрыть туры' : `По турам (${p.upcomingFixtures?.length || 0})`}</button>` : ''}
                 <button type="button" class="btn alt sm" data-part-club="${p.id}" title="Открыть кабинет этого клуба">🏟️ Клуб</button>
               </div>
@@ -14002,7 +14090,10 @@ async function pgAdmin(app) {
             <h3 style="margin:0;font-size:17px">👥 Участники и активность клубов (${e(sum.season || '')})</h3>
             <div class="small muted">Отслеживание последних заходов, онлайна, сезонной заявки и подачи составов на предстоящие туры.</div>
           </div>
-          <button type="button" class="btn alt sm" id="part_refresh_btn">🔄 Обновить</button>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <button type="button" class="btn sm" id="part_open_bot_msg_btn" style="background:#0284c7;color:#fff">✉️ Рассылка в бот</button>
+            <button type="button" class="btn alt sm" id="part_refresh_btn">🔄 Обновить</button>
+          </div>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px">
@@ -14103,15 +14194,480 @@ async function pgAdmin(app) {
           location.hash = '#/club';
         };
       });
+      ab.querySelectorAll('#part_tbody [data-part-msg]').forEach(b => {
+        b.onclick = () => {
+          openQuickBotMsgModal({
+            tgId: b.dataset.partMsg,
+            label: b.dataset.partLabel,
+            username: b.dataset.partUser,
+            teamName: b.dataset.partTeam
+          });
+        };
+      });
+      ab.querySelectorAll('#part_tbody [data-part-link-tg]').forEach(b => {
+        b.onclick = () => {
+          BOT_MSG_LINK_TEAM = b.dataset.partLinkTg || '';
+          AT = 'bot_msg';
+          re();
+        };
+      });
     };
 
     paintParticipantsTable();
+    if ($('#part_open_bot_msg_btn')) $('#part_open_bot_msg_btn').onclick = () => { AT = 'bot_msg'; re(); };
     if ($('#part_refresh_btn')) $('#part_refresh_btn').onclick = re;
     if ($('#part_q')) $('#part_q').oninput = ev => { PART_Q = ev.target.value || ''; paintParticipantsTable(); };
     if ($('#part_comp')) $('#part_comp').onchange = ev => { PART_COMP = ev.target.value; paintParticipantsTable(); };
     if ($('#part_status')) $('#part_status').onchange = ev => { PART_STATUS = ev.target.value; paintParticipantsTable(); };
     if ($('#part_sort')) $('#part_sort').onchange = ev => { PART_SORT = ev.target.value; paintParticipantsTable(); };
     if ($('#part_only_codes')) $('#part_only_codes').onchange = ev => { PART_ONLY_CODES = !!ev.target.checked; paintParticipantsTable(); };
+  }
+  else if (AT === 'bot_msg') {
+    const data = await api('/admin/telegram/recipients');
+    if (renderSeq !== ADMIN_RENDER_SEQ || !ab.isConnected) return;
+    const recipients = Array.isArray(data.recipients) ? data.recipients : [];
+    const clubsWithoutTg = Array.isArray(data.clubsWithoutTg) ? data.clubsWithoutTg : [];
+    const history = Array.isArray(data.history) ? data.history : [];
+    const validIds = new Set(recipients.map(r => r.tgId));
+    for (const id of [...BOT_MSG_SEL]) {
+      if (!validIds.has(id)) BOT_MSG_SEL.delete(id);
+    }
+    const clubRecipients = recipients.filter(r => Boolean(r.teamId));
+
+    const fmtMskFull = (ts) => {
+      if (!ts) return '—';
+      try {
+        return new Date(Number(ts)).toLocaleString('ru-RU', {
+          timeZone: 'Europe/Moscow',
+          day: '2-digit',
+          month: '2-digit',
+          year: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        }) + ' МСК';
+      } catch {
+        return '—';
+      }
+    };
+
+    const getFilteredRecipients = () => {
+      const qNorm = String(BOT_MSG_Q || '').toLowerCase().replace(/ё/g, 'е').trim();
+      if (!qNorm) return recipients;
+      return recipients.filter(r => {
+        const hay = `${r.displayName || ''} ${r.teamName || ''} ${r.compName || ''} ${r.username || ''} ${r.tgId || ''}`.toLowerCase().replace(/ё/g, 'е');
+        return hay.includes(qNorm);
+      });
+    };
+
+    const getTargetCount = () => {
+      if (BOT_MSG_MODE === 'all') return recipients.length;
+      if (BOT_MSG_MODE === 'clubs') return clubRecipients.length;
+      if (BOT_MSG_MODE === 'custom_id') return String(BOT_MSG_CUSTOM_ID || '').trim() ? 1 : 0;
+      return BOT_MSG_SEL.size;
+    };
+
+    const allTeamOpts = [
+      ...(clubsWithoutTg.length ? [`<optgroup label="Клубы без привязанного Telegram">${clubsWithoutTg.map(c => `<option value="${e(c.id)}" ${BOT_MSG_LINK_TEAM === c.id ? 'selected' : ''}>${e(c.name)} (${e(c.compName)})</option>`).join('')}</optgroup>`] : []),
+      `<optgroup label="Все клубы">${T.slice().sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(t => `<option value="${e(t.id)}" ${BOT_MSG_LINK_TEAM === t.id ? 'selected' : ''}>${e(t.name)}</option>`).join('')}</optgroup>`
+    ].join('');
+
+    const renderLastResHtml = () => {
+      if (!BOT_MSG_LAST_RES) return '';
+      const r = BOT_MSG_LAST_RES;
+      const items = Array.isArray(r.results) ? r.results : [];
+      return `
+        <div style="margin-top:12px;padding:10px 12px;border-radius:8px;border:1px solid ${r.failedCount ? '#fde68a' : '#86efac'};background:${r.failedCount ? '#fffbeb' : '#f0fdf4'}">
+          <div style="font-weight:700;font-size:13px;margin-bottom:6px">
+            Результат отправки: доставлено <b>${r.sentCount || 0}</b> из <b>${r.totalTargets || 0}</b>${r.failedCount ? `, ошибок: <span style="color:#b91c1c">${r.failedCount}</span>` : ' ✅'}
+          </div>
+          <div style="max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:4px">
+            ${items.map(it => `
+              <div class="small" style="display:flex;justify-content:space-between;gap:8px;padding:3px 6px;background:#fff;border-radius:5px;border:1px solid #e2e8f0">
+                <span>${it.ok ? '✅' : '❌'} <b>${e(it.label || it.tgId)}</b></span>
+                <span class="muted">${it.ok ? 'Доставлено' : e(it.error || 'Ошибка')}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    };
+
+    ab.innerHTML = `
+      <div class="panel" style="margin-bottom:12px">
+        <div class="row sp" style="gap:10px;flex-wrap:wrap">
+          <div>
+            <h3 style="margin:0;font-size:17px">✉️ Сообщения пользователям в Telegram-бот</h3>
+            <div class="small muted">Отправляйте сообщения всем участникам сразу, владельцам клубов, выбранным пользователям или по конкретному Telegram ID.</div>
+          </div>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <button type="button" class="btn alt sm" id="bm_sync_btn" title="Загрузить пользователей, которые писали /start боту">🔄 Подтянуть из бота</button>
+            <button type="button" class="btn alt sm" id="bm_refresh_btn">🔄 Обновить</button>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          ${data.hasBotToken
+            ? `<span class="tag sm" style="background:#dcfce7;color:#15803d;border-color:#86efac;font-weight:700">✅ Бот подключён</span>`
+            : `<span class="tag sm" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-weight:700">⚠️ Токен бота не задан (вкладка «Настройки»)</span>`}
+          <span class="tag sm">👥 Всего контактов: <b>${recipients.length}</b></span>
+          <span class="tag sm">🏟️ Привязано клубов: <b>${clubRecipients.length}</b></span>
+          ${data.defaultChannel ? `<span class="tag sm">📢 Канал: <code>${e(data.defaultChannel)}</code></span>` : ''}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;margin-bottom:12px;align-items:start">
+        <div class="panel">
+          <h3 style="margin:0 0 10px;font-size:16px">📨 Написать сообщение</h3>
+          <div class="small muted" style="margin-bottom:6px">Кому отправить:</div>
+          <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px" id="bm_mode_tabs">
+            <button type="button" class="btn sm ${BOT_MSG_MODE === 'all' ? '' : 'alt'}" data-bm-mode="all">📢 Всем (${recipients.length})</button>
+            <button type="button" class="btn sm ${BOT_MSG_MODE === 'clubs' ? '' : 'alt'}" data-bm-mode="clubs">🏟️ Клубам (${clubRecipients.length})</button>
+            <button type="button" class="btn sm ${BOT_MSG_MODE === 'selected' ? '' : 'alt'}" data-bm-mode="selected">🎯 Выбранным (<span id="bm_sel_badge">${BOT_MSG_SEL.size}</span>)</button>
+            <button type="button" class="btn sm ${BOT_MSG_MODE === 'custom_id' ? '' : 'alt'}" data-bm-mode="custom_id">🆔 По Telegram ID</button>
+          </div>
+
+          <div id="bm_custom_wrap" style="margin-bottom:10px;display:${BOT_MSG_MODE === 'custom_id' ? 'block' : 'none'}">
+            <label class="small muted" style="display:block;margin-bottom:4px">Числовой Telegram ID пользователя (или @username канала)</label>
+            <input id="bm_custom_id" value="${e(BOT_MSG_CUSTOM_ID)}" placeholder="Например: 123456789 или @mychannel" style="width:100%">
+          </div>
+
+          <div id="bm_sel_summary" class="small" style="margin-bottom:10px;padding:7px 10px;border-radius:6px;background:#f8fafc;border:1px solid #e2e8f0;display:${BOT_MSG_MODE === 'selected' ? 'flex' : 'none'};justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+            <span id="bm_sel_summary_txt"></span>
+            <button type="button" class="btn alt sm" id="bm_clear_sel_btn">Очистить</button>
+          </div>
+
+          <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
+            <span class="small muted" style="align-self:center">Шаблон:</span>
+            <button type="button" class="btn alt sm" data-bm-tpl="lineup">⏰ О составе</button>
+            <button type="button" class="btn alt sm" data-bm-tpl="news">📢 Важная новость</button>
+            <button type="button" class="btn alt sm" data-bm-tpl="round">⚽ Старт тура</button>
+          </div>
+
+          <div class="row sp" style="gap:8px;margin-bottom:6px;flex-wrap:wrap">
+            <div class="row" style="gap:10px;align-items:center">
+              <label class="small" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0">
+                <input type="radio" name="bm_parse" value="HTML" ${BOT_MSG_PARSE === 'HTML' ? 'checked' : ''} style="width:auto"> HTML
+              </label>
+              <label class="small" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0">
+                <input type="radio" name="bm_parse" value="plain" ${BOT_MSG_PARSE === 'plain' ? 'checked' : ''} style="width:auto"> Обычный текст
+              </label>
+            </div>
+            <span class="small muted">Поддержка: &lt;b&gt;, &lt;i&gt;, &lt;code&gt;</span>
+          </div>
+
+          <textarea id="bm_text" rows="7" maxlength="8000" placeholder="Введите текст сообщения для пользователей..." style="width:100%;font-size:14px;line-height:1.45">${e(BOT_MSG_TEXT)}</textarea>
+
+          <div class="row sp" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+            <span class="small muted" id="bm_char_cnt">${BOT_MSG_TEXT.length} / 8000</span>
+            <button type="button" class="btn" id="bm_send_btn" style="background:#0284c7;color:#fff;font-weight:700" ${!data.hasBotToken ? 'disabled' : ''}>
+              📨 Отправить (<span id="bm_target_cnt">${getTargetCount()}</span>)
+            </button>
+          </div>
+          <div id="bm_last_res_wrap">${renderLastResHtml()}</div>
+        </div>
+
+        <div class="panel">
+          <div class="row sp" style="margin-bottom:8px;gap:8px;flex-wrap:wrap">
+            <h3 style="margin:0;font-size:16px">👥 Получатели в боте</h3>
+            <div class="row" style="gap:4px;flex-wrap:wrap">
+              <button type="button" class="btn alt sm" id="bm_sel_vis_btn">Выбрать всех</button>
+              <button type="button" class="btn alt sm" id="bm_sel_clubs_btn">Только клубы</button>
+            </div>
+          </div>
+          <input id="bm_q" type="search" value="${e(BOT_MSG_Q)}" placeholder="🔍 Поиск по имени, клубу, @username или Telegram ID..." style="width:100%;margin-bottom:8px">
+          <div id="bm_rec_list" style="max-height:390px;overflow-y:auto;display:flex;flex-direction:column;gap:6px"></div>
+
+          <details style="margin-top:12px;border-top:1px solid #e2e8f0;padding-top:10px" ${BOT_MSG_LINK_TEAM ? 'open' : ''}>
+            <summary style="cursor:pointer;font-weight:700;font-size:13px;color:#0f172a">➕ Добавить или привязать Telegram ID к клубу</summary>
+            <div class="small muted" style="margin:6px 0 8px">
+              Если пользователь ещё не открывал Mini App в Telegram, укажите его числовой Telegram ID вручную (узнать можно через @userinfobot), и он сразу появится в списке рассылки.
+            </div>
+            <div style="display:grid;gap:8px">
+              <input id="bm_link_tgid" placeholder="Telegram ID (только цифры, например 512345678)">
+              <input id="bm_link_name" placeholder="Имя или @username (необязательно)">
+              <select id="bm_link_team">
+                <option value="">— Без привязки к клубу (просто пользователь) —</option>
+                ${allTeamOpts}
+              </select>
+              <button type="button" class="btn alt sm" id="bm_link_save_btn">💾 Сохранить контакт</button>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin:0 0 10px;font-size:16px">📜 История отправок (${history.length})</h3>
+        ${history.length ? `
+          <div class="wrap" style="overflow-x:auto">
+            <table style="width:100%;font-size:13px">
+              <thead>
+                <tr>
+                  <th class="l">Время</th>
+                  <th class="l">Получатели</th>
+                  <th>Доставка</th>
+                  <th class="l">Текст</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${history.map(h => `
+                  <tr>
+                    <td class="l" style="white-space:nowrap">${e(fmtMskFull(h.at))}</td>
+                    <td class="l"><b>${e(h.targetSummary || '')}</b></td>
+                    <td style="white-space:nowrap">
+                      <span class="tag sm" style="background:${h.failedCount ? '#fef3c7' : '#dcfce7'};color:${h.failedCount ? '#92400e' : '#15803d'};font-weight:700">
+                        ✅ ${Number(h.sentCount || 0)} / ${Number(h.targetCount || 0)}
+                      </span>
+                      ${h.failedCount ? `<span class="small" style="color:#b91c1c;margin-left:4px">(${Number(h.failedCount)} ош.)</span>` : ''}
+                    </td>
+                    <td class="l" style="max-width:440px">
+                      <div class="small" style="white-space:pre-wrap;word-break:break-word;max-height:66px;overflow:hidden">${e(h.text || '')}</div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : `<div class="small muted">История рассылок через сайт пока пуста.</div>`}
+      </div>
+    `;
+
+    const paintComposerCounters = () => {
+      const cnt = getTargetCount();
+      if ($('#bm_sel_badge')) $('#bm_sel_badge').textContent = String(BOT_MSG_SEL.size);
+      if ($('#bm_target_cnt')) $('#bm_target_cnt').textContent = String(cnt);
+      if ($('#bm_custom_wrap')) $('#bm_custom_wrap').style.display = BOT_MSG_MODE === 'custom_id' ? 'block' : 'none';
+      if ($('#bm_sel_summary')) {
+        $('#bm_sel_summary').style.display = BOT_MSG_MODE === 'selected' ? 'flex' : 'none';
+        const names = recipients.filter(r => BOT_MSG_SEL.has(r.tgId)).slice(0, 3).map(r => r.teamName ? `${r.displayName} (${r.teamName})` : r.displayName);
+        const extra = BOT_MSG_SEL.size > 3 ? ` и ещё ${BOT_MSG_SEL.size - 3}` : '';
+        if ($('#bm_sel_summary_txt')) {
+          $('#bm_sel_summary_txt').innerHTML = BOT_MSG_SEL.size
+            ? `Выбрано: <b>${BOT_MSG_SEL.size}</b> (${e(names.join(', '))}${e(extra)})`
+            : 'Отметьте галочками нужных участников справа или нажмите «Только ему».';
+        }
+      }
+      ab.querySelectorAll('#bm_mode_tabs [data-bm-mode]').forEach(btn => {
+        const active = btn.dataset.bmMode === BOT_MSG_MODE;
+        btn.className = `btn sm ${active ? '' : 'alt'}`;
+      });
+    };
+
+    const paintRecipientsList = () => {
+      const box = $('#bm_rec_list');
+      if (!box) return;
+      const list = getFilteredRecipients();
+      if (!list.length) {
+        box.innerHTML = recipients.length
+          ? `<div class="small muted" style="padding:14px;text-align:center">Никого не найдено по запросу «${e(BOT_MSG_Q)}».</div>`
+          : `<div class="small muted" style="padding:14px;background:#f8fafc;border-radius:8px;border:1px dashed #cbd5e1;line-height:1.5">
+              Пока нет пользователей бота в базе.<br>
+              • Пользователи добавляются автоматически при входе через Telegram Mini App,<br>
+              • Нажмите <b>«🔄 Подтянуть из бота»</b> сверху, если участники уже нажимали <code>/start</code>,<br>
+              • Или добавьте нужный Telegram ID вручную в блоке ниже.
+            </div>`;
+        return;
+      }
+      box.innerHTML = list.map(r => {
+        const checked = BOT_MSG_SEL.has(r.tgId);
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid ${checked ? '#38bdf8' : '#e2e8f0'};background:${checked ? '#f0f9ff' : '#fff'};border-radius:8px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;min-width:0;margin:0">
+              <input type="checkbox" data-bm-chk="${e(r.tgId)}" ${checked ? 'checked' : ''} style="width:auto;flex-shrink:0">
+              ${r.teamLogo ? `<img class="t-logo sm" src="${r.teamLogo}" alt="" style="flex-shrink:0">` : ''}
+              <div style="min-width:0;flex:1">
+                <div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                  ${e(r.displayName)}
+                  ${r.teamName ? `<span class="tag sm" style="margin-left:4px;font-size:10.5px">${e(r.teamName)}</span>` : ''}
+                  ${r.blockedBot ? `<span class="tag sm" style="background:#fee2e2;color:#b91c1c;margin-left:4px;font-size:10px">Бот заблокирован</span>` : ''}
+                </div>
+                <div class="small muted" style="font-size:11px">
+                  ${r.username ? `@${e(r.username)} · ` : ''}ID ${e(r.tgId)}${r.compName ? ` · ${e(r.compName)}` : ''}
+                </div>
+              </div>
+            </label>
+            <button type="button" class="btn alt sm" data-bm-only="${e(r.tgId)}" title="Выбрать только этого пользователя" style="flex-shrink:0">✉️ Только ему</button>
+          </div>
+        `;
+      }).join('');
+
+      box.querySelectorAll('[data-bm-chk]').forEach(chk => {
+        chk.onchange = () => {
+          const id = chk.dataset.bmChk;
+          if (chk.checked) BOT_MSG_SEL.add(id);
+          else BOT_MSG_SEL.delete(id);
+          if (BOT_MSG_SEL.size > 0 && BOT_MSG_MODE !== 'selected') BOT_MSG_MODE = 'selected';
+          paintComposerCounters();
+          paintRecipientsList();
+        };
+      });
+      box.querySelectorAll('[data-bm-only]').forEach(btn => {
+        btn.onclick = () => {
+          const id = btn.dataset.bmOnly;
+          BOT_MSG_SEL.clear();
+          BOT_MSG_SEL.add(id);
+          BOT_MSG_MODE = 'selected';
+          paintComposerCounters();
+          paintRecipientsList();
+          const ta = $('#bm_text');
+          if (ta) ta.focus();
+        };
+      });
+    };
+
+    paintComposerCounters();
+    paintRecipientsList();
+
+    ab.querySelectorAll('#bm_mode_tabs [data-bm-mode]').forEach(btn => {
+      btn.onclick = () => {
+        BOT_MSG_MODE = btn.dataset.bmMode;
+        paintComposerCounters();
+      };
+    });
+    if ($('#bm_custom_id')) $('#bm_custom_id').oninput = ev => {
+      BOT_MSG_CUSTOM_ID = ev.target.value || '';
+      paintComposerCounters();
+    };
+    if ($('#bm_clear_sel_btn')) $('#bm_clear_sel_btn').onclick = () => {
+      BOT_MSG_SEL.clear();
+      paintComposerCounters();
+      paintRecipientsList();
+    };
+    if ($('#bm_sel_vis_btn')) $('#bm_sel_vis_btn').onclick = () => {
+      for (const r of getFilteredRecipients()) BOT_MSG_SEL.add(r.tgId);
+      BOT_MSG_MODE = 'selected';
+      paintComposerCounters();
+      paintRecipientsList();
+    };
+    if ($('#bm_sel_clubs_btn')) $('#bm_sel_clubs_btn').onclick = () => {
+      BOT_MSG_SEL.clear();
+      for (const r of getFilteredRecipients()) {
+        if (r.teamId) BOT_MSG_SEL.add(r.tgId);
+      }
+      BOT_MSG_MODE = 'selected';
+      paintComposerCounters();
+      paintRecipientsList();
+    };
+    if ($('#bm_q')) $('#bm_q').oninput = ev => {
+      BOT_MSG_Q = ev.target.value || '';
+      paintRecipientsList();
+    };
+    ab.querySelectorAll('input[name="bm_parse"]').forEach(radio => {
+      radio.onchange = () => { BOT_MSG_PARSE = radio.value === 'plain' ? 'plain' : 'HTML'; };
+    });
+    if ($('#bm_text')) $('#bm_text').oninput = ev => {
+      BOT_MSG_TEXT = ev.target.value || '';
+      if ($('#bm_char_cnt')) $('#bm_char_cnt').textContent = `${BOT_MSG_TEXT.length} / 8000`;
+    };
+    ab.querySelectorAll('[data-bm-tpl]').forEach(btn => {
+      btn.onclick = () => {
+        const t = btn.dataset.bmTpl;
+        const tplMap = {
+          lineup: '⏰ <b>Напоминание о составе!</b>\nНе забудьте подать состав и тактику своего клуба на ближайший матч на сайте лиги.',
+          news: '📢 <b>Важное объявление администрации</b>\n',
+          round: '⚽ <b>Новый тур уже открыт!</b>\nПроверьте расписание матчей и подготовьте команду к игре.'
+        };
+        const txt = tplMap[t] || '';
+        const ta = $('#bm_text');
+        if (ta) {
+          ta.value = txt;
+          BOT_MSG_TEXT = txt;
+          if ($('#bm_char_cnt')) $('#bm_char_cnt').textContent = `${BOT_MSG_TEXT.length} / 8000`;
+          ta.focus();
+        }
+      };
+    });
+
+    if ($('#bm_refresh_btn')) $('#bm_refresh_btn').onclick = re;
+    if ($('#bm_sync_btn')) $('#bm_sync_btn').onclick = async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      const prev = btn.textContent;
+      btn.textContent = 'Синхронизация...';
+      try {
+        const res = await api('/admin/telegram/sync-bot-users', { method: 'POST', body: '{}' });
+        toast(`Проверено обновлений: ${res.updatesChecked}, найдено: ${res.usersFound} (+${res.added} новых)`);
+        re();
+      } catch (err) {
+        toast(err.message || 'Не удалось подтянуть пользователей', true);
+        btn.disabled = false;
+        btn.textContent = prev;
+      }
+    };
+    if ($('#bm_link_save_btn')) $('#bm_link_save_btn').onclick = async () => {
+      const tgId = String($('#bm_link_tgid')?.value || '').trim();
+      const displayName = String($('#bm_link_name')?.value || '').trim();
+      const teamId = String($('#bm_link_team')?.value || '').trim();
+      const isUserOnly = displayName.startsWith('@');
+      const r = await act(() => api('/admin/telegram/link-club', {
+        method: 'POST',
+        body: JSON.stringify({
+          tgId,
+          teamId,
+          username: isUserOnly ? displayName : '',
+          displayName: isUserOnly ? '' : displayName
+        })
+      }), 'Контакт сохранён');
+      if (r) {
+        BOT_MSG_LINK_TEAM = '';
+        re();
+      }
+    };
+
+    const executeSend = async () => {
+      const btn = $('#bm_send_btn');
+      const text = String($('#bm_text')?.value || '').trim();
+      if (!text) return toast('Введите текст сообщения', true);
+      const payload = {
+        mode: BOT_MSG_MODE,
+        parseMode: BOT_MSG_PARSE,
+        text,
+        customChatId: BOT_MSG_MODE === 'custom_id' ? String($('#bm_custom_id')?.value || '').trim() : '',
+        recipientIds: BOT_MSG_MODE === 'selected' ? [...BOT_MSG_SEL] : []
+      };
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Отправка...';
+      }
+      try {
+        const res = await api('/admin/telegram/send-direct', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        BOT_MSG_LAST_RES = res;
+        if (res.sentCount > 0 && res.failedCount === 0) {
+          toast(`Доставлено сообщений: ${res.sentCount}`);
+          BOT_MSG_TEXT = '';
+        } else if (res.sentCount > 0) {
+          toast(`Отправлено: ${res.sentCount}, ошибок: ${res.failedCount}`, true);
+        } else {
+          toast('Не удалось доставить ни одного сообщения', true);
+        }
+        re();
+      } catch (err) {
+        toast(err.message || 'Ошибка отправки', true);
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = `📨 Отправить (<span id="bm_target_cnt">${getTargetCount()}</span>)`;
+        }
+      }
+    };
+
+    if ($('#bm_send_btn')) $('#bm_send_btn').onclick = () => {
+      const text = String($('#bm_text')?.value || '').trim();
+      if (!text) return toast('Введите текст сообщения', true);
+      const targetCnt = getTargetCount();
+      if (!targetCnt) return toast('Выберите хотя бы одного получателя', true);
+      if (targetCnt > 1) {
+        confirmModal({
+          title: 'Подтверждение рассылки в бот',
+          msg: `Отправить это сообщение в Telegram-бот сразу ${targetCnt} получателям?`,
+          okText: `Да, отправить (${targetCnt})`,
+          okStyle: 'background:#0284c7;color:#fff;font-weight:700',
+          onOk: executeSend
+        });
+      } else {
+        executeSend();
+      }
+    };
   }
   else if (AT === 'players') {
     const euTeams = T.filter(t => t.comp === 'europe');
