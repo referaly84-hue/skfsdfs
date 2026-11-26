@@ -3193,10 +3193,12 @@ async function boot() {
     }
   }
 
-  // Фиксируем ID авторизованного клуба, чтобы пользователь оставался в нём
+  // Восстанавливаем активную команду клуба (основная или дубль), по умолчанию — свой клуб
   if (S.me?.role === 'club' && S.me.teamId) {
-    CLUB_TID = S.me.teamId;
-    try { localStorage.setItem('rpl_club_tid', S.me.teamId); } catch (e) {}
+    let savedTid = '';
+    try { savedTid = localStorage.getItem('rpl_club_tid') || ''; } catch (e) {}
+    if (!CLUB_TID) CLUB_TID = savedTid || S.me.teamId;
+    try { localStorage.setItem('rpl_club_tid', CLUB_TID); } catch (e) {}
   }
 
   // Автоматическая авторизация через Telegram WebApp (профиль зрителя или привязка к владельцу клуба)
@@ -6786,7 +6788,7 @@ async function ensureTransferAdProof(title, subtitle = 'Просмотрите �
   }
   try {
     const ext = await ensureExt();
-    const opts = (S.me?.role === 'admin' && CLUB_TID) ? { teamId: CLUB_TID } : undefined;
+    const opts = CLUB_TID ? { teamId: CLUB_TID } : undefined;
     const adRes = await ext.runAdsgramBlock('transfer_request', title, subtitle, opts);
     if (adRes?.adProof) {
       window.__lastTransferAdCd = {
@@ -6803,7 +6805,7 @@ async function ensureTransferAdProof(title, subtitle = 'Просмотрите �
 }
 
 function setupEuropeanTransferHandlers(app, refreshFn) {
-  const withT = o => S.me?.role === 'admin' ? { ...o, teamId: CLUB_TID } : o;
+  const withT = o => CLUB_TID ? { ...o, teamId: CLUB_TID } : o;
   const tabSingle = $('#tr_tab_single');
   const tabBatch = $('#tr_tab_batch');
   const wrapSingle = $('#tr_single_wrap');
@@ -6856,7 +6858,7 @@ function setupEuropeanTransferHandlers(app, refreshFn) {
   }
   syncTrLoanVisibility();
 
-  const trqUrl = '/club/transfer-requests' + (S.me?.role === 'admin' && CLUB_TID ? '?teamId=' + encodeURIComponent(CLUB_TID) : '');
+  const trqUrl = '/club/transfer-requests' + (CLUB_TID ? '?teamId=' + encodeURIComponent(CLUB_TID) : '');
   api(trqUrl).then(r => {
     const box = $('#tr_list');
     if (!box) return;
@@ -7753,7 +7755,11 @@ let FAMILY_WB = { leftId: '', rightId: '', leftQ: '', rightQ: '', leftPos: 'ALL'
 async function pgClub(app) {
   if (!S.me) return location.hash = '#/login';
   if (S.me.role === 'club') {
-    CLUB_TID = S.me.teamId || '';
+    if (!CLUB_TID) {
+      let savedTid = '';
+      try { savedTid = localStorage.getItem('rpl_club_tid') || ''; } catch (e) {}
+      CLUB_TID = savedTid || S.me.teamId || '';
+    }
     if (CLUB_TID) {
       try { localStorage.setItem('rpl_club_tid', CLUB_TID); } catch (e) {}
     }
@@ -7761,26 +7767,36 @@ async function pgClub(app) {
     const t = (S.st?.teams || []).filter(t => t.comp === 'rpl');
     CLUB_TID = t[0]?.id || '';
   }
-  const q = S.me.role === 'admin' ? '?teamId=' + CLUB_TID : '';
+  let q = CLUB_TID ? '?teamId=' + encodeURIComponent(CLUB_TID) : '';
   let c;
   try {
     c = await api('/club' + q);
   } catch (x) {
-    app.innerHTML = `<div class="panel warn">${e(x.message)}</div>`;
-    return;
+    if (S.me.role === 'club' && S.me.teamId && CLUB_TID && CLUB_TID !== S.me.teamId) {
+      CLUB_TID = S.me.teamId;
+      try { localStorage.setItem('rpl_club_tid', CLUB_TID); } catch (e) {}
+      q = '?teamId=' + encodeURIComponent(CLUB_TID);
+      try {
+        c = await api('/club' + q);
+      } catch (x2) {
+        app.innerHTML = `<div class="panel warn">${e(x2.message)}</div>`;
+        return;
+      }
+    } else {
+      app.innerHTML = `<div class="panel warn">${e(x.message)}</div>`;
+      return;
+    }
   }
   if (S.me.role === 'club' && c?.team?.id) {
-    S.me.teamId = c.team.id;
-    S.me.teamName = c.team.name;
     CLUB_TID = c.team.id;
     try { localStorage.setItem('rpl_club_tid', c.team.id); } catch (e) {}
-    if (S.st) {
+    if (c.team.id === S.me.teamId && S.st) {
       S.st.clubNotifications = c.notifications || [];
       S.st.unreadNotificationsCount = Number(c.unreadNotificationsCount || 0);
+      drawChrome();
     }
-    drawChrome();
   }
-  const withT = o => S.me.role === 'admin' ? { ...o, teamId: CLUB_TID } : o;
+  const withT = o => CLUB_TID ? { ...o, teamId: CLUB_TID } : o;
   setTransferCooldown(c.team.id, c.transferCooldown);
   const isAdmin = S.me?.role === 'admin';
   const logo = c.team.logo || teamLogo(c.team.id);
@@ -7937,9 +7953,12 @@ async function pgClub(app) {
   app.querySelectorAll('[data-fam-jump]').forEach(b => b.onclick = () => {
     const tid = b.dataset.famJump;
     if (!tid) return;
-    if (isAdmin) {
-      if (tid !== CLUB_TID) {
+    if (isAdmin || c.canSwitchFamily) {
+      if (tid !== (CLUB_TID || c.team.id)) {
         CLUB_TID = tid;
+        if (S.me?.role === 'club') {
+          try { localStorage.setItem('rpl_club_tid', CLUB_TID); } catch (e) {}
+        }
         pgClub(app);
       } else {
         CT = 'family';

@@ -148,9 +148,8 @@ async function renderClubFinesTab(cb: HTMLElement, _clubData: any, _onRefreshClu
   const app = window.__RPL_APP__;
   if (!app) return;
   const { api, e, S } = app;
-  const isAdmin = S.me?.role === "admin";
   const tid = app.getClubTid ? app.getClubTid() : "";
-  const q = isAdmin && tid ? `?teamId=${encodeURIComponent(tid)}` : "";
+  const q = tid ? `?teamId=${encodeURIComponent(tid)}` : "";
 
   cb.innerHTML = '<div class="panel muted">Загружаем решения КДК РФС и рейтинг Фэйр-плэй…</div>';
 

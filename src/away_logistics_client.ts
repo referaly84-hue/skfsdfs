@@ -403,10 +403,9 @@ async function renderClubLogisticsTab(
     return;
   }
   const { api, act, e, S } = app;
-  const isAdmin = S.me?.role === "admin";
   const tid = app.getClubTid ? app.getClubTid() : "";
-  const q = isAdmin && tid ? `?teamId=${encodeURIComponent(tid)}` : "";
-  const withT = (obj: any) => (isAdmin && tid ? { ...obj, teamId: tid } : obj);
+  const q = tid ? `?teamId=${encodeURIComponent(tid)}` : "";
+  const withT = (obj: any) => (tid ? { ...obj, teamId: tid } : obj);
 
   cb.innerHTML = '<div class="panel muted">Загружаем расписание выездов, тарифы билетов и гостиниц…</div>';
 

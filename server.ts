@@ -18420,11 +18420,39 @@ app.use((req, res, next) => {
     }
   }
   req.me = session;
+  (req as any).canManageTeam = (tid: string) => canManageClubId(session, tid);
   aiCtx.run({ ai: session?.role === "admin", calls: 0 }, () => next());
 });
 var admin = (req, res, next) => req.me?.role === "admin" ? next() : res.status(403).json({ error: "\u041D\u0443\u0436\u0435\u043D \u0432\u0445\u043E\u0434 \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0430" });
-var clubOf = (req) => req.me?.role === "admin" ? req.body?.teamId || req.query.teamId : req.me?.teamId;
+function isMainClubTeam(t: any) {
+  return Boolean(t && !t.parentTeamId && !isReserveOrYouthName(t.name));
+}
+function canManageClubId(me: any, targetTid: string) {
+  if (!me || !targetTid || !team(targetTid)) return false;
+  if (me.role === "admin") return true;
+  if (me.role === "club" && me.teamId) {
+    if (targetTid === me.teamId) return true;
+    const homeTeam = team(me.teamId);
+    if (isMainClubTeam(homeTeam) && clubFamilyOf(me.teamId).includes(targetTid)) {
+      return true;
+    }
+  }
+  return false;
+}
+var clubOf = (req) => {
+  const requested = String(req.body?.teamId || req.query?.teamId || "").trim();
+  if (req.me?.role === "admin") return requested;
+  if (req.me?.role === "club") {
+    if (requested) return canManageClubId(req.me, requested) ? requested : "";
+    return req.me?.teamId;
+  }
+  return null;
+};
 var needClub = (req, res, next) => {
+  const requested = String(req.body?.teamId || req.query?.teamId || "").trim();
+  if (req.me?.role === "club" && requested && !canManageClubId(req.me, requested)) {
+    return res.status(403).json({ error: "\u041D\u0435\u0442 \u0434\u043E\u0441\u0442\u0443\u043F\u0430 \u043A \u044D\u0442\u043E\u0439 \u043A\u043E\u043C\u0430\u043D\u0434\u0435" });
+  }
   const t = clubOf(req);
   if (!t || !team(t)) return res.status(403).json({ error: "\u0412\u043E\u0439\u0434\u0438\u0442\u0435 \u043F\u043E \u043A\u043E\u0434\u0443 \u043A\u043B\u0443\u0431\u0430" });
   req.tid = t;
@@ -19154,7 +19182,7 @@ app.get("/api/match/:id", async (req, res) => {
         const tid = f[s];
         const L = m.ctx.lineup[s];
         if (L) {
-          const canSeeTactics = isAdm || req.me?.teamId && req.me.teamId === tid;
+          const canSeeTactics = canManageClubId(req.me, tid);
           const fmStr = L.formation || "4-3-3";
           const slotRes = assignFormationSlots(fmStr, L.starters || [], L.slots);
           const orderedIds = slotRes.entries.length === (L.starters || []).length
@@ -19250,7 +19278,7 @@ app.get("/api/match/:id", async (req, res) => {
       const tid = f[s];
       const tm = s === "home" ? H : A;
       const L = getLineup(f, tid);
-      const canSeeTactics = isAdm || req.me?.teamId && req.me.teamId === tid;
+      const canSeeTactics = canManageClubId(req.me, tid);
       const slotRes = assignFormationSlots(L.formation || "4-3-3", L.starters || [], L.slots);
       const orderedIds = slotRes.entries.length === (L.starters || []).length
         ? slotRes.entries.map((e) => e.pid)
@@ -21873,6 +21901,8 @@ app.get("/api/club", needClub, (req, res) => {
     coachRequests: coachRequestsFor(req.tid),
     coachWatchlist: enrichClubCoachWatchlist(req.tid),
     family: sisterIdsOf(req.tid).map((id) => ({ id, name: tn(id), logo: teamLogo(id), comp: team(id)?.comp, compName: compOf(team(id)?.comp)?.name || team(id)?.comp || "" })),
+    canSwitchFamily: isAdmin || isMainClubTeam(req.me?.role === "club" ? team(req.me.teamId) : null),
+    homeTeamId: req.me?.role === "club" ? req.me.teamId : null,
     familyTeams: (() => {
       const fIds = clubFamilyOf(req.tid);
       if (fIds.length <= 1) return [];
@@ -23826,8 +23856,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
       db.lineups[lineupKey(f, req.tid, "away")] = La;
       recordTacticSnapshot(req.tid, f, Lh, "home");
       recordTacticSnapshot(req.tid, f, La, "away");
-      if (req.me?.role === "club" && req.me.teamId === req.tid) {
+      if (req.me?.role === "club" && canManageClubId(req.me, req.tid)) {
         recordClubActivity(req.tid, { isLineup: true, immediateSave: true });
+        if (req.me.teamId && req.me.teamId !== req.tid) recordClubActivity(req.me.teamId);
       }
       save();
       return res.json({ ok: 1, home: Lh, away: La });
@@ -23848,8 +23879,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
     }
     db.lineups[lineupKey(f, req.tid, side)] = L;
     recordTacticSnapshot(req.tid, f, L, side);
-    if (req.me?.role === "club" && req.me.teamId === req.tid) {
+    if (req.me?.role === "club" && canManageClubId(req.me, req.tid)) {
       recordClubActivity(req.tid, { isLineup: true, immediateSave: true });
+      if (req.me.teamId && req.me.teamId !== req.tid) recordClubActivity(req.me.teamId);
     }
     save();
     return res.json({ ok: 1, side, slots: L.slots, roles: L.roles, plannedSubs: L.plannedSubs });
@@ -23903,8 +23935,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
   };
   db.lineups[f.id + ":" + req.tid] = L;
   recordTacticSnapshot(req.tid, f, L, null);
-  if (req.me?.role === "club" && req.me.teamId === req.tid) {
+  if (req.me?.role === "club" && canManageClubId(req.me, req.tid)) {
     recordClubActivity(req.tid, { isLineup: true, immediateSave: true });
+    if (req.me.teamId && req.me.teamId !== req.tid) recordClubActivity(req.me.teamId);
   }
   const ownStarters = L.starters.filter((id) => ownIds.has(id));
   const ownBench = L.bench.filter((id) => ownIds.has(id));

@@ -1640,7 +1640,8 @@ export function renderClubSponsorsTab(cb: HTMLElement, c: any, reloadClub: () =>
     cb.innerHTML = '<div class="panel">Данные спонсоров недоступны.</div>';
     return;
   }
-  const teamParam = S.me?.role === 'admin' ? { teamId: getClubTid() } : {};
+  const curTid = getClubTid ? getClubTid() : '';
+  const teamParam = curTid ? { teamId: curTid } : {};
   const pct = Math.min(100, Math.round((sp.totalViews / sp.totalRequired) * 100));
 
   const nowSp = Date.now();

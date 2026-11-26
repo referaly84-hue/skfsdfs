@@ -1968,6 +1968,10 @@ export function resolveActor(req: any): {
 } {
   const cid = cleanClientId(req.headers?.['x-client-id'] || req.body?.clientId || req.query?.clientId);
   if (req.me?.role === 'club' && req.me.teamId) {
+    const qTid = String(req.tid || req.body?.teamId || req.query?.teamId || '').trim();
+    if (qTid && qTid !== req.me.teamId && typeof req.canManageTeam === 'function' && req.canManageTeam(qTid)) {
+      return { actorKey: `club:${qTid}`, type: 'club', teamId: qTid, clientId: cid };
+    }
     return { actorKey: `club:${req.me.teamId}`, type: 'club', teamId: req.me.teamId, clientId: cid };
   }
   if (req.me?.role === 'admin') {
