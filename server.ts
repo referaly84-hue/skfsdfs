@@ -6880,7 +6880,8 @@ function seed() {
     clubFairPlayAdjustments: [],
     clubFinesProcessed: {},
     playerMorale: {},
-    playerTalks: {}
+    playerTalks: {},
+    clubActivity: {}
   };
   for (const [name, city, lat, lon, stadium] of RPL) {
     d.teams.push({ id: uid(), name, comp: "rpl", city, lat, lon, stadium, code: mkCode(), logo: getTeamLogo(name, null, "rpl") });
@@ -18414,6 +18415,7 @@ app.use((req, res, next) => {
     }
     if (t) {
       session.teamName = t.name;
+      recordClubActivity(t.id, { sessionAt: session.at });
     }
   }
   req.me = session;
@@ -18753,6 +18755,7 @@ app.post("/api/login", (req, res) => {
   db.sessions[token] = { ...s, at: Date.now() };
   if (s.role === "club" && s.teamId) {
     linkTelegramToClub(getAdsCtx(), s.teamId, req);
+    recordClubActivity(s.teamId, { isLogin: true, immediateSave: true });
   }
   pgSaveSession(token, db.sessions[token]);
   save();
@@ -19463,6 +19466,37 @@ app.get("/api/cup/structure", (req, res) => {
 });
 var activeClientsMap = /* @__PURE__ */ new Map();
 var drawPeakRealViewers = 1;
+var clubActivityLastSaveMap = /* @__PURE__ */ new Map<string, number>();
+function recordClubActivity(
+  teamId: string,
+  opts?: { isLogin?: boolean; isLineup?: boolean; path?: string; sessionAt?: number; immediateSave?: boolean }
+) {
+  if (!teamId || !db) return;
+  db.clubActivity ||= {};
+  const now = Date.now();
+  const cur = db.clubActivity[teamId] || {};
+  const prevLastSeen = Number(cur.lastSeenAt || 0);
+  cur.lastSeenAt = Math.max(prevLastSeen, now);
+  if (opts?.sessionAt && (!cur.lastLoginAt || opts.sessionAt > cur.lastLoginAt)) {
+    cur.lastLoginAt = opts.sessionAt;
+  }
+  if (opts?.isLogin) {
+    cur.lastLoginAt = now;
+    cur.visitsCount = Number(cur.visitsCount || 0) + 1;
+  }
+  if (opts?.isLineup) {
+    cur.lastLineupAt = now;
+  }
+  if (opts?.path) {
+    cur.lastPath = String(opts.path).slice(0, 120);
+  }
+  db.clubActivity[teamId] = cur;
+  const lastSaved = clubActivityLastSaveMap.get(teamId) || 0;
+  if (opts?.immediateSave || now - lastSaved >= 60000) {
+    clubActivityLastSaveMap.set(teamId, now);
+    save();
+  }
+}
 function pruneInactivePresence() {
   const cutoff = Date.now() - 15e3;
   for (const [id, c] of activeClientsMap.entries()) {
@@ -19483,6 +19517,7 @@ function registerPresence(data) {
     path: data.path || existing?.path || "",
     watchingDraw: watching,
     role: data.role || existing?.role || "guest",
+    teamId: data.teamId !== undefined ? data.teamId : existing?.teamId,
     team: data.team || existing?.team,
     joinedAt: existing?.joinedAt || now
   });
@@ -19515,6 +19550,7 @@ function getPresenceSummary() {
     activeSessions: Array.from(activeClientsMap.values()).map((c) => ({
       id: c.id.slice(0, 8),
       role: c.role,
+      teamId: c.teamId || null,
       team: c.team,
       watchingDraw: c.watchingDraw,
       durationSec: Math.floor((Date.now() - c.joinedAt) / 1e3)
@@ -19523,15 +19559,23 @@ function getPresenceSummary() {
 }
 app.post("/api/presence/ping", (req, res) => {
   const visitorId = req.body?.clientId || req.body?.visitorId || (req.session?.id ? "sess_" + req.session.id : "client_" + req.ip);
-  const { path: path4, watchingDraw, role, team: team2 } = req.body || {};
+  const { path: path4, page, watchingDraw, role, team: team2, teamName, teamId } = req.body || {};
+  const effPath = path4 || page || "";
+  const effRole = req.me?.role || role || "guest";
+  const effTeamId = req.me?.role === "club" ? req.me.teamId : (teamId || "");
+  const effTeamName = req.me?.role === "club" ? (req.me.teamName || (req.me.teamId ? tn(req.me.teamId) : "")) : (team2 || teamName || "");
   registerPresence({
     visitorId,
-    path: path4,
+    path: effPath,
     watchingDraw,
-    role: role || req.me?.role || "guest",
-    team: team2 || req.me?.team,
+    role: effRole,
+    teamId: effTeamId,
+    team: effTeamName,
     ip: req.ip
   });
+  if (req.me?.role === "club" && req.me.teamId) {
+    recordClubActivity(req.me.teamId, { path: effPath });
+  }
   const summary = getPresenceSummary();
   if (db.liveDraw) {
     db.liveDraw.viewers = summary.drawViewers;
@@ -23781,6 +23825,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
       db.lineups[lineupKey(f, req.tid, "away")] = La;
       recordTacticSnapshot(req.tid, f, Lh, "home");
       recordTacticSnapshot(req.tid, f, La, "away");
+      if (req.me?.role === "club" && req.me.teamId === req.tid) {
+        recordClubActivity(req.tid, { isLineup: true, immediateSave: true });
+      }
       save();
       return res.json({ ok: 1, home: Lh, away: La });
     }
@@ -23800,6 +23847,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
     }
     db.lineups[lineupKey(f, req.tid, side)] = L;
     recordTacticSnapshot(req.tid, f, L, side);
+    if (req.me?.role === "club" && req.me.teamId === req.tid) {
+      recordClubActivity(req.tid, { isLineup: true, immediateSave: true });
+    }
     save();
     return res.json({ ok: 1, side, slots: L.slots, roles: L.roles, plannedSubs: L.plannedSubs });
   }
@@ -23852,6 +23902,9 @@ app.post("/api/club/lineup", needClub, (req, res) => {
   };
   db.lineups[f.id + ":" + req.tid] = L;
   recordTacticSnapshot(req.tid, f, L, null);
+  if (req.me?.role === "club" && req.me.teamId === req.tid) {
+    recordClubActivity(req.tid, { isLineup: true, immediateSave: true });
+  }
   const ownStarters = L.starters.filter((id) => ownIds.has(id));
   const ownBench = L.bench.filter((id) => ownIds.has(id));
   const ownSlotEntries = L.slots.filter((s) => ownIds.has(s.pid));
@@ -24078,6 +24131,201 @@ app.get("/api/admin/overview", admin, async (req, res) => {
       toLogo: teamLogo(t.to)
     }))
   });
+});
+app.get("/api/admin/participants", admin, (_req, res) => {
+  ensureTeamCodes();
+  pruneInactivePresence();
+  const now = Date.now();
+  const curSeason = S();
+  const activeMode = db.settings?.timeMode || "game";
+  const allScheduledSeasonFx = seasonFx().filter((f) => f.status === "scheduled");
+
+  const sessionMap = new Map<string, { count: number; lastAt: number }>();
+  for (const sess of Object.values(db.sessions || {}) as any[]) {
+    if (sess?.role === "club" && sess.teamId) {
+      const cur = sessionMap.get(sess.teamId) || { count: 0, lastAt: 0 };
+      cur.count += 1;
+      cur.lastAt = Math.max(cur.lastAt, Number(sess.at || 0));
+      sessionMap.set(sess.teamId, cur);
+    }
+  }
+
+  const tgLinksByTeam = new Map<string, number>();
+  for (const tid of Object.values(db.telegramClubLinks || {}) as string[]) {
+    if (tid) tgLinksByTeam.set(tid, (tgLinksByTeam.get(tid) || 0) + 1);
+  }
+
+  const onlineByTeam = new Map<string, { path: string; joinedAt: number; lastPing: number }>();
+  for (const c of activeClientsMap.values()) {
+    if (c.role === "club" && (c.teamId || c.team)) {
+      const matchedTid = c.teamId || db.teams.find((tm) => tm.name === c.team)?.id;
+      if (matchedTid) {
+        const prev = onlineByTeam.get(matchedTid);
+        if (!prev || c.lastPing > prev.lastPing) {
+          onlineByTeam.set(matchedTid, { path: c.path || "", joinedAt: c.joinedAt || c.lastPing, lastPing: c.lastPing });
+        }
+      }
+    }
+  }
+
+  const COMP_ORDER: Record<string, number> = {
+    rpl: 0, fnl: 1, media: 2, media_div2: 3, "2la_gold": 4, "2la_silver": 5
+  };
+  const compRank = (c: string) => COMP_ORDER[c] ?? (c.startsWith("2lb") ? 6 : c === "europe" ? 8 : 7);
+
+  const participants = db.teams.map((t) => {
+    const actRec = db.clubActivity?.[t.id] || {};
+    const sessInfo = sessionMap.get(t.id) || { count: 0, lastAt: 0 };
+    const onlineInfo = onlineByTeam.get(t.id) || null;
+    const ownerProf = db.ownerProfiles?.[`club:${t.id}`] || null;
+    const ownerName = ownerProf?.customName || ownerProf?.displayName || "";
+    const telegramUsername = ownerProf?.telegramUsername || "";
+    const tgLinked = Boolean(ownerProf?.telegramId || (tgLinksByTeam.get(t.id) || 0) > 0);
+
+    const teamScheduled = allScheduledSeasonFx
+      .filter((f) => f.home === t.id || f.away === t.id)
+      .sort((a, b) => {
+        if (activeMode === "real") {
+          const da = realAt(a).getTime(), dbTime = realAt(b).getTime();
+          if (da !== dbTime) return da - dbTime;
+        }
+        return (String(a.date || "") + String(a.time || "")).localeCompare(String(b.date || "") + String(b.time || ""));
+      });
+
+    let latestLineupAt = Number(actRec.lastLineupAt || 0);
+    const lineupEntries = teamScheduled.map((f) => {
+      const intra = isIntraSquad(f);
+      let submitted = false;
+      let savedAt = 0;
+      let partial = false;
+      if (intra) {
+        const lh = db.lineups?.[lineupKey(f, t.id, "home")] || null;
+        const la = db.lineups?.[lineupKey(f, t.id, "away")] || null;
+        submitted = Boolean(lh && la);
+        partial = Boolean((lh || la) && !(lh && la));
+        savedAt = Math.max(Number(lh?.at || 0), Number(la?.at || 0));
+      } else {
+        const l = db.lineups?.[lineupKey(f, t.id)] || db.lineups?.[f.id + ":" + t.id] || null;
+        submitted = Boolean(l);
+        savedAt = Number(l?.at || 0);
+      }
+      if (savedAt > latestLineupAt) latestLineupAt = savedAt;
+      const oppId = f.home === t.id ? f.away : f.home;
+      return {
+        id: f.id,
+        comp: f.comp,
+        compName: compName(f),
+        round: f.round ?? null,
+        label: f.label || roundLabel(f) || "",
+        date: f.date || "",
+        realDate: f.realDate || f.date || "",
+        time: f.time || "",
+        realTime: f.realTime || f.time || "",
+        opponentName: intra ? "Внутрикомандный матч" : (tn(oppId) || oppId),
+        isHome: f.home === t.id,
+        intraSquad: intra,
+        submitted,
+        partial,
+        savedAt: savedAt || null
+      };
+    });
+
+    // Check historical lineups too in case only done matches had savedAt
+    for (const [lk, lv] of Object.entries(db.lineups || {}) as [string, any][]) {
+      if (lk.includes(`:${t.id}`) && Number(lv?.at || 0) > latestLineupAt) {
+        latestLineupAt = Number(lv.at);
+      }
+    }
+
+    const totalScheduled = lineupEntries.length;
+    const submittedUpcomingCount = lineupEntries.filter((x) => x.submitted).length;
+    let consecutiveSubmittedCount = 0;
+    let submittedThrough: any = null;
+    for (const entry of lineupEntries) {
+      if (!entry.submitted) break;
+      consecutiveSubmittedCount += 1;
+      submittedThrough = entry;
+    }
+    const furthestSubmitted = [...lineupEntries].reverse().find((x) => x.submitted) || null;
+    const nextMatch = lineupEntries[0] || null;
+
+    // Last seen / login timestamps
+    const lastLoginAt = Math.max(Number(actRec.lastLoginAt || 0), sessInfo.lastAt) || null;
+    const lastSeenAt = Math.max(
+      Number(actRec.lastSeenAt || 0),
+      lastLoginAt || 0,
+      onlineInfo ? onlineInfo.lastPing : 0
+    ) || null;
+
+    let activityStatus: "online" | "active" | "idle" | "inactive" = "inactive";
+    if (onlineInfo) {
+      activityStatus = "online";
+    } else if (lastSeenAt && now - lastSeenAt <= 24 * 3600 * 1000) {
+      activityStatus = "active";
+    } else if (lastSeenAt && now - lastSeenAt <= 72 * 3600 * 1000) {
+      activityStatus = "idle";
+    } else if (nextMatch?.submitted && latestLineupAt && now - latestLineupAt <= 48 * 3600 * 1000) {
+      activityStatus = "active";
+    }
+
+    const seasonSubmitted = !!(db.settings.squadSubmissions?.[t.id]?.season === curSeason && Array.isArray(db.squads[t.id]));
+
+    return {
+      id: t.id,
+      name: t.name,
+      comp: t.comp,
+      compName: compOf(t.comp)?.name || t.comp,
+      logo: teamLogo(t.id),
+      code: t.code || "",
+      ownerName: ownerName && ownerName !== t.name ? ownerName : "",
+      telegramUsername,
+      tgLinked,
+      onlineNow: Boolean(onlineInfo),
+      lastPath: onlineInfo?.path || actRec.lastPath || null,
+      lastSeenAt,
+      lastLoginAt,
+      lastLineupAt: latestLineupAt || null,
+      visitsCount: Number(actRec.visitsCount || 0) || (lastLoginAt ? 1 : 0),
+      activeSessionsCount: sessInfo.count,
+      activityStatus,
+      seasonSubmitted,
+      squadCount: squadOf(t.id).length,
+      rosterCount: rosterOf(t.id).length,
+      totalScheduled,
+      submittedUpcomingCount,
+      consecutiveSubmittedCount,
+      submittedThroughLabel: submittedThrough ? `${submittedThrough.compName}${submittedThrough.label ? ` · ${submittedThrough.label}` : ""}` : null,
+      submittedThroughRound: submittedThrough?.round ?? null,
+      submittedThroughDate: submittedThrough ? (activeMode === "real" ? submittedThrough.realDate : submittedThrough.date) : null,
+      furthestSubmittedLabel: furthestSubmitted ? `${furthestSubmitted.compName}${furthestSubmitted.label ? ` · ${furthestSubmitted.label}` : ""}` : null,
+      furthestSubmittedRound: furthestSubmitted?.round ?? null,
+      furthestSubmittedDate: furthestSubmitted ? (activeMode === "real" ? furthestSubmitted.realDate : furthestSubmitted.date) : null,
+      nextMatch,
+      upcomingFixtures: lineupEntries.slice(0, 10)
+    };
+  }).sort((a, b) => {
+    const cr = compRank(a.comp) - compRank(b.comp);
+    if (cr !== 0) return cr;
+    return a.name.localeCompare(b.name, "ru");
+  });
+
+  const summary = {
+    totalClubs: participants.length,
+    withCodesCount: participants.filter((p) => Boolean(p.code)).length,
+    onlineClubs: participants.filter((p) => p.onlineNow).length,
+    totalSiteOnline: getTotalSiteOnline(),
+    active24h: participants.filter((p) => p.activityStatus === "online" || p.activityStatus === "active").length,
+    idleCount: participants.filter((p) => p.activityStatus === "idle").length,
+    inactiveCount: participants.filter((p) => p.activityStatus === "inactive").length,
+    nextMatchSubmitted: participants.filter((p) => p.nextMatch?.submitted).length,
+    nextMatchMissing: participants.filter((p) => p.nextMatch && !p.nextMatch.submitted).length,
+    seasonSubmittedCount: participants.filter((p) => p.seasonSubmitted).length,
+    season: curSeason,
+    timeMode: activeMode,
+    currentGameDate: getCurrentGameDate()
+  };
+
+  res.json({ ok: 1, summary, participants });
 });
 function buildAdminAiStatusPayload() {
   syncSecretsFromDisk();

@@ -12856,6 +12856,8 @@ function intraLineupForm(box, f, c, withT, app) {
 
 /* ───── админка ───── */
 let AT = 'matches', AF = { comp: 'rpl', round: '' }, ADM_TRQ_TAB = 'pending', ADM_RPL_TR_TAB = 'pending', ADMIN_RENDER_SEQ = 0, AC_FILT = 'all', AP_TEAM_FILT = '', AP_QUERY = '';
+let PART_COMP = 'all', PART_STATUS = 'all', PART_Q = '', PART_SORT = 'league', PART_ONLY_CODES = false;
+const PART_EXPANDED = new Set();
 async function pgAdmin(app) {
   if (S.me?.role !== 'admin') return location.hash = '#/login';
   const renderSeq = ++ADMIN_RENDER_SEQ;
@@ -12871,6 +12873,7 @@ async function pgAdmin(app) {
     ['coaches', `Тренеры и штаб${ov.pendingCoachRequestsCount ? ' (' + ov.pendingCoachRequestsCount + ')' : ''}`],
     ['tournaments', 'Турниры'],
     ['clubs', 'Клубы и логотипы'],
+    ['participants', '👥 Участники'],
     ['players', 'Игроки'],
     ['derbies', 'Дерби'],
     ['internal', 'Внутренний турнир'],
@@ -13799,6 +13802,316 @@ async function pgAdmin(app) {
         };
       });
     });
+  }
+  else if (AT === 'participants') {
+    const resp = await api('/admin/participants');
+    if (renderSeq !== ADMIN_RENDER_SEQ || !ab.isConnected) return;
+    const sum = resp.summary || {};
+    const allParticipants = Array.isArray(resp.participants) ? resp.participants : [];
+
+    const fmtAgoRu = (ts) => {
+      if (!ts) return 'Ни разу';
+      const diff = Math.max(0, Date.now() - Number(ts));
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return 'Только что';
+      if (mins < 60) return `${mins} мин. назад`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs} ч. назад`;
+      const days = Math.floor(hrs / 24);
+      if (days === 1) return '1 день назад';
+      if (days < 5) return `${days} дн. назад`;
+      return `${days} дн. назад`;
+    };
+    const fmtMskDt = (ts) => {
+      if (!ts) return '—';
+      try {
+        return new Date(Number(ts)).toLocaleString('ru-RU', {
+          timeZone: 'Europe/Moscow',
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        }) + ' МСК';
+      } catch {
+        return '—';
+      }
+    };
+    const fmtMatchDate = (m) => {
+      if (!m) return '';
+      const d = (sum.timeMode === 'real' ? (m.realDate || m.date) : m.date) || '';
+      const t = (sum.timeMode === 'real' ? (m.realTime || m.time) : m.time) || '';
+      return `${d ? fmtD(d) : ''}${t ? ' ' + t : ''}`.trim();
+    };
+    const statusBadgeHtml = (p) => {
+      if (p.onlineNow) {
+        return '<span class="tag sm" style="background:#dcfce7;color:#15803d;border-color:#86efac;font-weight:700">🟢 Онлайн сейчас</span>';
+      }
+      if (p.activityStatus === 'active') {
+        return `<span class="tag sm" style="background:#ecfdf5;color:#047857;border-color:#a7f3d0;font-weight:700">🟢 Активен · ${e(fmtAgoRu(p.lastSeenAt || p.lastLineupAt))}</span>`;
+      }
+      if (p.activityStatus === 'idle') {
+        return `<span class="tag sm" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;font-weight:700">🟡 ${e(fmtAgoRu(p.lastSeenAt))}</span>`;
+      }
+      return `<span class="tag sm" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-weight:700">${p.lastSeenAt ? `🔴 Неактивен · ${e(fmtAgoRu(p.lastSeenAt))}` : '🔴 Не заходил'}</span>`;
+    };
+
+    const filterList = () => {
+      const qNorm = String(PART_Q || '').toLowerCase().replace(/ё/g, 'е').trim();
+      let list = allParticipants.filter(p => {
+        if (PART_ONLY_CODES && !p.code) return false;
+        if (PART_COMP !== 'all') {
+          if (PART_COMP === '2la') {
+            if (!String(p.comp || '').startsWith('2la')) return false;
+          } else if (PART_COMP === '2lb') {
+            if (!String(p.comp || '').startsWith('2lb')) return false;
+          } else if (PART_COMP === 'media') {
+            if (p.comp !== 'media' && p.comp !== 'media_div2') return false;
+          } else if (p.comp !== PART_COMP) {
+            return false;
+          }
+        }
+        if (PART_STATUS === 'online' && !p.onlineNow) return false;
+        if (PART_STATUS === 'active' && p.activityStatus !== 'online' && p.activityStatus !== 'active') return false;
+        if (PART_STATUS === 'no_lineup' && !(p.nextMatch && !p.nextMatch.submitted)) return false;
+        if (PART_STATUS === 'inactive' && p.activityStatus !== 'inactive' && p.activityStatus !== 'idle') return false;
+        if (qNorm) {
+          const hay = `${p.name || ''} ${p.ownerName || ''} ${p.telegramUsername || ''} ${p.code || ''} ${p.compName || ''}`.toLowerCase().replace(/ё/g, 'е');
+          if (!hay.includes(qNorm)) return false;
+        }
+        return true;
+      });
+      if (PART_SORT === 'recent') {
+        list = [...list].sort((a, b) => (b.onlineNow ? 1 : 0) - (a.onlineNow ? 1 : 0) || (Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0)) || a.name.localeCompare(b.name, 'ru'));
+      } else if (PART_SORT === 'stale') {
+        list = [...list].sort((a, b) => (Number(a.lastSeenAt || 0) - Number(b.lastSeenAt || 0)) || a.name.localeCompare(b.name, 'ru'));
+      } else if (PART_SORT === 'lineups') {
+        list = [...list].sort((a, b) => (b.consecutiveSubmittedCount - a.consecutiveSubmittedCount) || (b.submittedUpcomingCount - a.submittedUpcomingCount) || a.name.localeCompare(b.name, 'ru'));
+      }
+      return list;
+    };
+
+    const renderParticipantsRows = (list) => {
+      if (!list.length) {
+        return '<tr><td colspan="6" class="empty">Участники по заданным фильтрам не найдены.</td></tr>';
+      }
+      return list.map(p => {
+        const isExpanded = PART_EXPANDED.has(p.id);
+        const nm = p.nextMatch;
+        let nextHtml = '<span class="muted small">Нет предстоящих матчей</span>';
+        if (nm) {
+          nextHtml = `
+            <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+              ${nm.submitted
+                ? '<span class="tag sm" style="background:#dcfce7;color:#15803d;border-color:#86efac;font-weight:700">✅ Подан</span>'
+                : (nm.partial
+                  ? '<span class="tag sm" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;font-weight:700">⏳ Частично (1/2)</span>'
+                  : '<span class="tag sm" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-weight:700">⚠️ Не подан</span>')}
+              <span class="small"><b>${e(nm.label || nm.compName)}</b></span>
+            </div>
+            <div class="small muted" style="margin-top:2px">${nm.isHome ? 'vs' : '@'} ${e(nm.opponentName)}${fmtMatchDate(nm) ? ` · ${e(fmtMatchDate(nm))}` : ''}</div>`;
+        }
+
+        let throughHtml = '';
+        if (!p.totalScheduled) {
+          throughHtml = '<span class="muted small">Календарь пуст</span>';
+        } else if (p.consecutiveSubmittedCount > 0) {
+          throughHtml = `<div class="small" style="color:#15803d;font-weight:700">До: ${e(p.submittedThroughLabel || '')}</div>
+            <div class="small muted">Подряд: ${p.consecutiveSubmittedCount} из ${p.totalScheduled}${p.submittedUpcomingCount > p.consecutiveSubmittedCount ? ` · всего ${p.submittedUpcomingCount}` : ''}${p.submittedThroughDate ? ` (по ${e(fmtD(p.submittedThroughDate))})` : ''}</div>`;
+        } else if (p.submittedUpcomingCount > 0) {
+          throughHtml = `<div class="small" style="color:#b45309;font-weight:700">Ближайший не подан</div>
+            <div class="small muted">Есть ${p.submittedUpcomingCount} из ${p.totalScheduled} (до: ${e(p.furthestSubmittedLabel || '')})</div>`;
+        } else {
+          throughHtml = `<div class="small" style="color:#b91c1c;font-weight:600">Не поданы (0 из ${p.totalScheduled})</div>`;
+        }
+
+        const expandRow = isExpanded ? `
+          <tr style="background:#f8fafc">
+            <td colspan="6" style="padding:10px 14px">
+              <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:6px">📅 Ближайшие матчи клуба «${e(p.name)}» (подано ${p.submittedUpcomingCount} из ${p.totalScheduled}):</div>
+              ${p.upcomingFixtures?.length ? `
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:6px">
+                  ${p.upcomingFixtures.map(fx => `
+                    <div style="padding:6px 9px;border-radius:7px;background:#fff;border:1px solid ${fx.submitted ? '#86efac' : (fx.partial ? '#fcd34d' : '#fecaca')};display:flex;justify-content:space-between;align-items:center;gap:6px">
+                      <div style="min-width:0">
+                        <div style="font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e(fx.compName)}${fx.label ? ` · ${e(fx.label)}` : ''}</div>
+                        <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fx.isHome ? 'Дома' : 'В гостях'} · ${e(fx.opponentName)}</div>
+                        <div class="muted" style="font-size:10.5px">${e(fmtMatchDate(fx))}${fx.savedAt ? ` · сохр. ${e(fmtMskDt(fx.savedAt))}` : ''}</div>
+                      </div>
+                      <span class="tag sm" style="flex-shrink:0;background:${fx.submitted ? '#dcfce7' : (fx.partial ? '#fef3c7' : '#fee2e2')};color:${fx.submitted ? '#15803d' : (fx.partial ? '#92400e' : '#b91c1c')}">${fx.submitted ? '✅' : (fx.partial ? '1/2' : '❌')}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="muted small">Нет предстоящих матчей в расписании.</div>'}
+            </td>
+          </tr>` : '';
+
+        return `
+          <tr>
+            <td class="l" style="min-width:210px">
+              <div class="t-cell" style="align-items:flex-start">
+                ${p.logo ? `<img class="t-logo sm" src="${p.logo}" alt="" style="margin-top:2px"/>` : ''}
+                <div>
+                  <div>
+                    <b class="team-clickable" data-open-team-stats="${p.id}" style="cursor:pointer" title="Открыть информацию и статистику клуба">${e(p.name)}</b>
+                    <span class="tag sm" style="margin-left:4px;font-size:10.5px">${e(p.compName)}</span>
+                  </div>
+                  <div class="small muted" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:2px">
+                    ${p.ownerName ? `<span>👤 ${e(p.ownerName)}</span>` : ''}
+                    ${p.telegramUsername ? `<span>@${e(p.telegramUsername)}</span>` : (p.tgLinked ? '<span>TG привязан</span>' : '')}
+                    ${p.code ? `<span class="code" data-cp="${e(p.code)}" style="cursor:pointer;font-size:11px;padding:1px 5px" title="Скопировать код входа">${e(p.code)}</span>` : '<span style="font-size:11px">без кода</span>'}
+                  </div>
+                </div>
+              </div>
+            </td>
+            <td class="l" style="min-width:190px">
+              <div>${statusBadgeHtml(p)}</div>
+              <div class="small muted" style="margin-top:3px">
+                Визит: <b>${e(fmtMskDt(p.lastSeenAt))}</b>
+                ${p.lastLoginAt && p.lastLoginAt !== p.lastSeenAt ? `<br>Вход: ${e(fmtMskDt(p.lastLoginAt))}` : ''}
+                ${p.lastPath ? `<br>Страница: <code>${e(p.lastPath)}</code>` : ''}
+              </div>
+            </td>
+            <td style="white-space:nowrap">
+              ${p.comp === 'europe'
+                ? `<b>${p.squadCount}</b> <span class="muted small">в заявке</span>`
+                : `${p.seasonSubmitted
+                    ? `<span class="tag sm" style="background:#dcfce7;color:#15803d;font-weight:700">✅ Подана</span>`
+                    : `<span class="tag sm" style="background:#f1f5f9;color:#475569">Черновик</span>`}
+                  <div class="small muted" style="margin-top:2px">${p.squadCount}/28 (сост. ${p.rosterCount})</div>`}
+            </td>
+            <td class="l" style="min-width:205px">${nextHtml}</td>
+            <td class="l" style="min-width:210px">
+              ${throughHtml}
+              ${p.lastLineupAt ? `<div class="small muted">Посл. отправка: ${e(fmtAgoRu(p.lastLineupAt))}</div>` : ''}
+            </td>
+            <td style="text-align:right;white-space:nowrap">
+              <div class="row" style="gap:4px;justify-content:flex-end;flex-wrap:wrap">
+                ${p.totalScheduled ? `<button type="button" class="btn alt sm" data-part-expand="${p.id}">${isExpanded ? 'Скрыть туры' : `По турам (${p.upcomingFixtures?.length || 0})`}</button>` : ''}
+                <button type="button" class="btn alt sm" data-part-club="${p.id}" title="Открыть кабинет этого клуба">🏟️ Клуб</button>
+              </div>
+            </td>
+          </tr>
+          ${expandRow}`;
+      }).join('');
+    };
+
+    ab.innerHTML = `
+      <div class="panel" style="margin-bottom:12px">
+        <div class="row sp" style="gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <div>
+            <h3 style="margin:0;font-size:17px">👥 Участники и активность клубов (${e(sum.season || '')})</h3>
+            <div class="small muted">Отслеживание последних заходов, онлайна, сезонной заявки и подачи составов на предстоящие туры.</div>
+          </div>
+          <button type="button" class="btn alt sm" id="part_refresh_btn">🔄 Обновить</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px">
+          <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:10px 12px">
+            <div style="font-size:20px;font-weight:800;color:#15803d">${sum.onlineClubs || 0} <span style="font-size:12px;font-weight:600">клубов</span></div>
+            <div class="small" style="color:#166534;font-weight:600">🟢 Сейчас онлайн</div>
+            <div class="muted" style="font-size:11px">Всего на сайте: ${sum.totalSiteOnline || 1}</div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px">
+            <div style="font-size:20px;font-weight:800;color:#0f172a">${sum.active24h || 0}</div>
+            <div class="small" style="color:#334155;font-weight:600">✅ Активны за 24 часа</div>
+            <div class="muted" style="font-size:11px">С кодом входа: ${sum.withCodesCount || 0}</div>
+          </div>
+          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 12px">
+            <div style="font-size:20px;font-weight:800;color:#1d4ed8">${sum.nextMatchSubmitted || 0}</div>
+            <div class="small" style="color:#1e40af;font-weight:600">📋 Состав на ближайший матч</div>
+            <div class="muted" style="font-size:11px">Ещё не подан: ${sum.nextMatchMissing || 0}</div>
+          </div>
+          <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:10px 12px">
+            <div style="font-size:20px;font-weight:800;color:#b91c1c">${sum.inactiveCount || 0}</div>
+            <div class="small" style="color:#991b1b;font-weight:600">🔴 Давно / не заходили</div>
+            <div class="muted" style="font-size:11px">Пауза 1–3 дня: ${sum.idleCount || 0}</div>
+          </div>
+        </div>
+
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="part_q" type="search" value="${e(PART_Q)}" placeholder="🔍 Поиск клуба, менеджера, @tg или кода..." style="flex:1;min-width:210px">
+          <select id="part_comp" style="min-width:165px">
+            <option value="all" ${PART_COMP === 'all' ? 'selected' : ''}>Все лиги (${allParticipants.length})</option>
+            <option value="rpl" ${PART_COMP === 'rpl' ? 'selected' : ''}>РПЛ</option>
+            <option value="fnl" ${PART_COMP === 'fnl' ? 'selected' : ''}>Первая лига (ФНЛ)</option>
+            <option value="media" ${PART_COMP === 'media' ? 'selected' : ''}>Медиалига</option>
+            <option value="2la" ${PART_COMP === '2la' ? 'selected' : ''}>Вторая лига А</option>
+            <option value="2lb" ${PART_COMP === '2lb' ? 'selected' : ''}>Вторая лига Б</option>
+            <option value="europe" ${PART_COMP === 'europe' ? 'selected' : ''}>Европа</option>
+          </select>
+          <select id="part_status" style="min-width:195px">
+            <option value="all" ${PART_STATUS === 'all' ? 'selected' : ''}>Все статусы активности</option>
+            <option value="online" ${PART_STATUS === 'online' ? 'selected' : ''}>🟢 Только онлайн сейчас</option>
+            <option value="active" ${PART_STATUS === 'active' ? 'selected' : ''}>✅ Активные (за 24 ч)</option>
+            <option value="no_lineup" ${PART_STATUS === 'no_lineup' ? 'selected' : ''}>⚠️ Не подан на ближайший матч</option>
+            <option value="inactive" ${PART_STATUS === 'inactive' ? 'selected' : ''}>🔴 Неактивные / > 24 ч назад</option>
+          </select>
+          <select id="part_sort" style="min-width:195px">
+            <option value="league" ${PART_SORT === 'league' ? 'selected' : ''}>Сорт: По лиге и названию</option>
+            <option value="recent" ${PART_SORT === 'recent' ? 'selected' : ''}>Сорт: Сначала свежие визиты</option>
+            <option value="stale" ${PART_SORT === 'stale' ? 'selected' : ''}>Сорт: Сначала неактивные</option>
+            <option value="lineups" ${PART_SORT === 'lineups' ? 'selected' : ''}>Сорт: По поданным турам</option>
+          </select>
+          <label class="small" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin:0">
+            <input type="checkbox" id="part_only_codes" ${PART_ONLY_CODES ? 'checked' : ''} style="width:auto"> Только с кодом входа
+          </label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="row sp" style="margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <div class="small muted" id="part_shown_count"></div>
+        </div>
+        <div class="wrap" style="overflow-x:auto">
+          <table style="width:100%;font-size:13px">
+            <thead>
+              <tr>
+                <th class="l">Клуб / Участник</th>
+                <th class="l">Последний визит</th>
+                <th>Заявка (${e(sum.season || '')})</th>
+                <th class="l">Ближайший матч</th>
+                <th class="l">Составы (до какого тура)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="part_tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    const paintParticipantsTable = () => {
+      const filtered = filterList();
+      const tbody = $('#part_tbody');
+      const cnt = $('#part_shown_count');
+      if (cnt) cnt.textContent = `Показано участников: ${filtered.length} из ${allParticipants.length}`;
+      if (tbody) tbody.innerHTML = renderParticipantsRows(filtered);
+      ab.querySelectorAll('#part_tbody [data-cp]').forEach(s => {
+        s.onclick = () => { navigator.clipboard?.writeText(s.dataset.cp); toast('Код скопирован'); };
+      });
+      ab.querySelectorAll('#part_tbody [data-part-expand]').forEach(b => {
+        b.onclick = () => {
+          const tid = b.dataset.partExpand;
+          if (PART_EXPANDED.has(tid)) PART_EXPANDED.delete(tid);
+          else PART_EXPANDED.add(tid);
+          paintParticipantsTable();
+        };
+      });
+      ab.querySelectorAll('#part_tbody [data-part-club]').forEach(b => {
+        b.onclick = () => {
+          CLUB_TID = b.dataset.partClub;
+          location.hash = '#/club';
+        };
+      });
+    };
+
+    paintParticipantsTable();
+    if ($('#part_refresh_btn')) $('#part_refresh_btn').onclick = re;
+    if ($('#part_q')) $('#part_q').oninput = ev => { PART_Q = ev.target.value || ''; paintParticipantsTable(); };
+    if ($('#part_comp')) $('#part_comp').onchange = ev => { PART_COMP = ev.target.value; paintParticipantsTable(); };
+    if ($('#part_status')) $('#part_status').onchange = ev => { PART_STATUS = ev.target.value; paintParticipantsTable(); };
+    if ($('#part_sort')) $('#part_sort').onchange = ev => { PART_SORT = ev.target.value; paintParticipantsTable(); };
+    if ($('#part_only_codes')) $('#part_only_codes').onchange = ev => { PART_ONLY_CODES = !!ev.target.checked; paintParticipantsTable(); };
   }
   else if (AT === 'players') {
     const euTeams = T.filter(t => t.comp === 'europe');
@@ -21406,6 +21719,7 @@ boot();
         clientId,
         page: location.hash || '/',
         watchingDraw: isWatching,
+        teamId: window.S?.me?.teamId || '',
         teamName: window.S?.me?.teamName || '',
         role: window.S?.me?.role || 'visitor'
       };
