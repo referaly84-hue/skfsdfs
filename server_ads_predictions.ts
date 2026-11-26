@@ -4974,6 +4974,20 @@ export function registerAdsAndPredictionsRoutes(app: Express, ctx: AdServerConte
     res.json({ ok: 1, message: 'Вариант игрока удалён из списка' });
   });
 
+  app.post('/api/admin/national/proposal/player/clear', ctx.admin, (req: any, res) => {
+    const teamType = resolveNtTeam(req);
+    const nt = ctx.ensureNationalTeam(teamType);
+    const { playerProposals } = getNationalProposals(nt.current);
+    const removedCount = playerProposals.length;
+    nt.current.playerProposals = [];
+    if (removedCount > 0) ctx.save();
+    res.json({
+      ok: 1,
+      removedCount,
+      message: removedCount > 0 ? `Список предложенных игроков очищен (${removedCount})` : 'Список предложенных игроков уже пуст',
+    });
+  });
+
   app.post('/api/admin/national/proposal/opponent/delete', ctx.admin, (req: any, res) => {
     const teamType = resolveNtTeam(req);
     const nt = ctx.ensureNationalTeam(teamType);

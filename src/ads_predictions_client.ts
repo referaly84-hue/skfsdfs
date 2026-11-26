@@ -2971,9 +2971,12 @@ export async function renderNationalProposalsSection(
   container: HTMLElement,
   cur: any,
   isAdmin: boolean,
-  reloadNational: () => void
+  reloadNational: () => void,
+  teamTypeParam?: string
 ) {
   const { api, e, toast, S } = B();
+  const activeTeamType = teamTypeParam === 'u21' || cur?.teamType === 'u21' ? 'u21' : 'main';
+  const isU21 = activeTeamType === 'u21';
   const isClub = S.me?.role === 'club';
   let clubRoster: any[] = [];
   if (isClub) {
@@ -2981,7 +2984,7 @@ export async function renderNationalProposalsSection(
       const c = await api('/club');
       const posOrd: Record<string, number> = { ВР: 0, ЛЗ: 1, ЛФЗ: 2, ЦЗ: 3, ПЗ: 4, ПФЗ: 5, ОП: 6, ЛП: 7, ЦП: 8, ПП: 9, АП: 10, ЛВ: 11, ЦФ: 12, СТ: 13, ПВ: 14 };
       clubRoster = (c.roster || c.squad || [])
-        .filter((p: any) => !p.playedForOtherNationalTeam && (!p.nation || String(p.nation).toLowerCase().includes('росс')))
+        .filter((p: any) => !p.playedForOtherNationalTeam && (!p.nation || String(p.nation).toLowerCase().includes('росс')) && (!isU21 || p.age == null || Number(p.age) <= 21))
         .sort((a: any, b: any) => (posOrd[a.pos] ?? 99) - (posOrd[b.pos] ?? 99) || (a.age ?? 99) - (b.age ?? 99) || String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
     } catch {
       clubRoster = [];
@@ -3050,7 +3053,10 @@ export async function renderNationalProposalsSection(
 
     <div class="grid g2" style="margin-top:12px">
       <div class="panel" style="margin-bottom:0">
-        <h3 style="margin:0 0 6px">Предложить игрока в сборную России</h3>
+        <div class="row sp" style="gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+          <h3 style="margin:0">${isU21 ? 'Предложить игрока в сборную U21' : 'Предложить игрока в сборную России'}</h3>
+          ${isAdmin && playerProps.length ? `<button type="button" class="btn alt sm" id="nt_prop_players_clear_btn" style="color:#b91c1c;border-color:#fca5a5" title="Удалить всех предложенных игроков из списка">🗑 Очистить предложенных (${playerProps.length})</button>` : ''}
+        </div>
         <div class="small muted" style="margin-bottom:10px;line-height:1.45">
           За просмотр рекламы можно предложить своего российского игрока и голосовать за кандидатов. Больше голосов даёт приоритет при равной хорошей форме (например, 4 голоса важнее 1), но провально играющий игрок не займёт место сильного кандидата.
         </div>
@@ -3092,13 +3098,16 @@ export async function renderNationalProposalsSection(
                 <td class="small">М:${pr.matches || 0} Г:${pr.goals || 0}${(pr.assists || 0) > 0 ? ` П:${pr.assists}` : ''}${statBadge}</td>
                 <td><b>${pr.votes}</b></td>
                 <td>
-                  <button class="btn alt sm" data-nt-vote-pl="${e(pr.pid)}" ${ntBtnDisabled ? 'disabled' : ''} style="min-height:38px;font-variant-numeric:tabular-nums;${ntBtnDisabled ? 'opacity:0.6' : ''}">
-                    ${ntMaxed
-                      ? 'Лимит'
-                      : ntInCd
-                        ? `<span data-nt-cd="${ntCdTarget}" data-nt-cd-fmt="short">⏳ ${fmtShortCooldown(ntCdTarget - nowNt)}</span>`
-                        : '+1 (реклама)'}
-                  </button>
+                  <div class="row" style="gap:4px;justify-content:flex-end;flex-wrap:nowrap">
+                    <button class="btn alt sm" data-nt-vote-pl="${e(pr.pid)}" ${ntBtnDisabled ? 'disabled' : ''} style="min-height:38px;font-variant-numeric:tabular-nums;${ntBtnDisabled ? 'opacity:0.6' : ''}">
+                      ${ntMaxed
+                        ? 'Лимит'
+                        : ntInCd
+                          ? `<span data-nt-cd="${ntCdTarget}" data-nt-cd-fmt="short">⏳ ${fmtShortCooldown(ntCdTarget - nowNt)}</span>`
+                          : '+1 (реклама)'}
+                    </button>
+                    ${isAdmin ? `<button type="button" class="btn alt sm" data-nt-del-pl="${e(pr.pid)}" data-nt-del-name="${e(pr.playerName || '')}" style="min-height:38px;color:#b91c1c;border-color:#fca5a5" title="Удалить предложенного игрока">✕</button>` : ''}
+                  </div>
                 </td>
               </tr>`;
             }).join('')}
@@ -3107,7 +3116,7 @@ export async function renderNationalProposalsSection(
       </div>
 
       <div class="panel" style="margin-bottom:0">
-        <h3 style="margin:0 0 6px">Соперник для товарищеского матча сборной</h3>
+        <h3 style="margin:0 0 6px">${isU21 ? 'Соперник для товарищеского матча U21' : 'Соперник для товарищеского матча сборной'}</h3>
         <div class="small muted" style="margin-bottom:10px;line-height:1.45">
           Предложите сборную-соперника за рекламу или проголосуйте за уже созданный вариант. Голосование открыто для всех пользователей.
         </div>
@@ -3145,6 +3154,7 @@ export async function renderNationalProposalsSection(
                           : 'Голос (реклама)'}
                     </button>
                     ${isAdmin ? `<button class="btn sm" data-nt-pick-opp="${e(op.opponent)}" title="Подставить соперника в форму матча">Выбрать</button>` : ''}
+                    ${isAdmin ? `<button type="button" class="btn alt sm" data-nt-del-opp="${e(op.id)}" style="color:#b91c1c;border-color:#fca5a5" title="Удалить вариант соперника">✕</button>` : ''}
                   </div>
                 </td>
               </tr>`).join('')}
@@ -3211,13 +3221,13 @@ export async function renderNationalProposalsSection(
       propPlBtn.disabled = true;
       let reloaded = false;
       try {
-        const adRes = await runAdsgramBlock('nt_propose_player', 'Предложение игрока в сборную России');
+        const adRes = await runAdsgramBlock(isU21 ? 'nt_u21_propose_player' : 'nt_propose_player', isU21 ? 'Предложение игрока в сборную U21' : 'Предложение игрока в сборную России');
         if (!adRes) {
           reloadNational();
           reloaded = true;
           return;
         }
-        const res = await api('/national/propose-player', { pid, note, adProof: adRes.adProof });
+        const res = await api('/national/propose-player', { team: activeTeamType, pid, note, adProof: adRes.adProof });
         toast(res.message);
         reloadNational();
         reloaded = true;
@@ -3240,13 +3250,13 @@ export async function renderNationalProposalsSection(
       btn.disabled = true;
       let reloaded = false;
       try {
-        const adRes = await runAdsgramBlock('nt_vote_player', 'Голосование за игрока в сборную России');
+        const adRes = await runAdsgramBlock(isU21 ? 'nt_u21_vote_player' : 'nt_vote_player', isU21 ? 'Голосование за игрока в сборную U21' : 'Голосование за игрока в сборную России');
         if (!adRes) {
           reloadNational();
           reloaded = true;
           return;
         }
-        const res = await api('/national/vote-player', { pid, adProof: adRes.adProof });
+        const res = await api('/national/vote-player', { team: activeTeamType, pid, adProof: adRes.adProof });
         toast(res.message);
         reloadNational();
         reloaded = true;
@@ -3259,6 +3269,38 @@ export async function renderNationalProposalsSection(
       }
     };
   });
+
+  container.querySelectorAll('[data-nt-del-pl]').forEach((b) => {
+    const btn = b as HTMLButtonElement;
+    btn.onclick = async () => {
+      const pid = btn.dataset.ntDelPl!;
+      if (!pid) return;
+      btn.disabled = true;
+      try {
+        const res = await api('/admin/national/proposal/player/delete', { team: activeTeamType, pid });
+        toast(res.message || 'Игрок удалён из списка предложенных');
+        reloadNational();
+      } catch (err: any) {
+        toast(err?.message || 'Не удалось удалить игрока', true);
+        if (document.body.contains(btn)) btn.disabled = false;
+      }
+    };
+  });
+
+  const clearPropsBtn = document.getElementById('nt_prop_players_clear_btn') as HTMLButtonElement | null;
+  if (clearPropsBtn) {
+    clearPropsBtn.onclick = async () => {
+      clearPropsBtn.disabled = true;
+      try {
+        const res = await api('/admin/national/proposal/player/clear', { team: activeTeamType });
+        toast(res.message || 'Список предложенных игроков очищен');
+        reloadNational();
+      } catch (err: any) {
+        toast(err?.message || 'Не удалось очистить список', true);
+        if (document.body.contains(clearPropsBtn)) clearPropsBtn.disabled = false;
+      }
+    };
+  }
 
   const propOppBtn = document.getElementById('nt_prop_opp_btn') as HTMLButtonElement | null;
   if (propOppBtn && !propOppBtn.disabled) {
@@ -3273,13 +3315,13 @@ export async function renderNationalProposalsSection(
       propOppBtn.disabled = true;
       let reloaded = false;
       try {
-        const adRes = await runAdsgramBlock('nt_propose_opp', `Предложить соперника: ${opponent}`);
+        const adRes = await runAdsgramBlock(isU21 ? 'nt_u21_propose_opp' : 'nt_propose_opp', `Предложить соперника: ${opponent}`);
         if (!adRes) {
           reloadNational();
           reloaded = true;
           return;
         }
-        const res = await api('/national/propose-opponent', { opponent, comment, adProof: adRes.adProof });
+        const res = await api('/national/propose-opponent', { team: activeTeamType, opponent, comment, adProof: adRes.adProof });
         toast(res.message);
         reloadNational();
         reloaded = true;
@@ -3302,13 +3344,13 @@ export async function renderNationalProposalsSection(
       btn.disabled = true;
       let reloaded = false;
       try {
-        const adRes = await runAdsgramBlock('nt_vote_opp', 'Голосование за соперника сборной России');
+        const adRes = await runAdsgramBlock(isU21 ? 'nt_u21_vote_opp' : 'nt_vote_opp', isU21 ? 'Голосование за соперника сборной U21' : 'Голосование за соперника сборной России');
         if (!adRes) {
           reloadNational();
           reloaded = true;
           return;
         }
-        const res = await api('/national/vote-opponent', { proposalId, adProof: adRes.adProof });
+        const res = await api('/national/vote-opponent', { team: activeTeamType, proposalId, adProof: adRes.adProof });
         toast(res.message);
         reloadNational();
         reloaded = true;
@@ -3318,6 +3360,23 @@ export async function renderNationalProposalsSection(
         reloaded = true;
       } finally {
         if (!reloaded && document.body.contains(btn)) btn.disabled = false;
+      }
+    };
+  });
+
+  container.querySelectorAll('[data-nt-del-opp]').forEach((b) => {
+    const btn = b as HTMLButtonElement;
+    btn.onclick = async () => {
+      const proposalId = btn.dataset.ntDelOpp!;
+      if (!proposalId) return;
+      btn.disabled = true;
+      try {
+        const res = await api('/admin/national/proposal/opponent/delete', { team: activeTeamType, proposalId });
+        toast(res.message || 'Вариант соперника удалён');
+        reloadNational();
+      } catch (err: any) {
+        toast(err?.message || 'Не удалось удалить вариант соперника', true);
+        if (document.body.contains(btn)) btn.disabled = false;
       }
     };
   });
