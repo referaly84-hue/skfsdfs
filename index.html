@@ -11626,7 +11626,10 @@ function lineupForm(box, f, c, withT, app) {
       : '');
 
   box.innerHTML = `<label>Схема</label><input class="fm" value="${e(L.formation || '4-3-3')}" style="max-width:140px">
-  <label>Состав: выберите 11 в старт и до 9 на скамейку <span class="muted small" data-cnt></span></label>
+  <div class="row sp" style="gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 6px">
+    <label style="margin:0">Состав: выберите 11 в старт и до 9 на скамейку <span class="muted small" data-cnt></span></label>
+    <button type="button" class="btn sm alt reset-lineup-btn" title="Снять всех игроков со старта и скамейки">🧹 Сбросить состав</button>
+  </div>
   ${unavailNotice}
   ${isAdmin ? `<div class="small muted" style="margin:0 0 8px;padding:6px 10px;background:var(--soft);border:1px solid var(--line);border-radius:6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
     <span><b>🔒 Индикатор готовности (только админ):</b></span>
@@ -11949,6 +11952,15 @@ function lineupForm(box, f, c, withT, app) {
       }
     }
     box.querySelector('[data-cnt]').innerHTML = `— старт ${a}/11, скамейка ${b}${legionInfo}`;
+    box.querySelectorAll('select[data-p]').forEach(sel => {
+      const row = sel.closest('.pick');
+      if (!row) return;
+      row.style.background = sel.value === 's'
+        ? 'rgba(22,163,74,0.09)'
+        : (sel.value === 'b' ? 'rgba(59,130,246,0.07)' : '');
+    });
+    const resetBtn = box.querySelector('.reset-lineup-btn');
+    if (resetBtn) resetBtn.disabled = a === 0 && b === 0;
     if (bonusEditorApi) bonusEditorApi.updateSets(sPids, bPids);
   };
   const SUB_COND_OPTIONS = [
@@ -12109,6 +12121,19 @@ function lineupForm(box, f, c, withT, app) {
   });
   box.querySelector('.fm')?.addEventListener('input', () => {
     handleFormationEdit();
+  });
+  box.querySelector('.reset-lineup-btn')?.addEventListener('click', () => {
+    const sels = [...box.querySelectorAll('select[data-p]:not(:disabled)')];
+    if (!sels.some(s => s.value !== '')) return;
+    sels.forEach(s => { s.value = ''; });
+    currentSlots = [];
+    currentPlannedSubs = [];
+    cnt();
+    renderSlotsEditor();
+    renderSubsEditor();
+    renderRolesEditor();
+    schedulePreview();
+    toast('Состав сброшен — выберите игроков заново');
   });
 
   let bonusEditorApi = null;
