@@ -17966,6 +17966,7 @@ let NT_TEAM = 'main';
 let NT_VIEW_STAGE = null;
 let NT_SORT = 'pos';
 let NT_SORT_DIR = 'asc';
+let NT_ADD_QUERY = '';
 const NT_POS_ORDER = {
   ВР: 0,
   ЛЗ: 1, ЛФЗ: 2, ЦЗ: 3, ПЗ: 4, ПФЗ: 5,
@@ -18011,6 +18012,7 @@ async function pgNational(app, subTeam) {
   if ((subTeam === 'u21' || subTeam === 'main') && NT_TEAM !== subTeam) {
     NT_TEAM = subTeam;
     NT_VIEW_STAGE = null;
+    NT_ADD_QUERY = '';
   } else if (subTeam === 'u21' || subTeam === 'main') {
     NT_TEAM = subTeam;
   }
@@ -18019,7 +18021,7 @@ async function pgNational(app, subTeam) {
   const isAdmin = S.me?.role === 'admin';
   const [data, plData] = await Promise.all([
     api(`/national?team=${NT_TEAM}`),
-    isAdmin ? api(`/admin/players?eligible=${NT_TEAM}&limit=1500`) : Promise.resolve([])
+    isAdmin ? api(`/admin/players?eligible=${NT_TEAM}&limit=5000`) : Promise.resolve([])
   ]);
   const cur = data.current || { title: isU21 ? 'Ближайшая пауза молодёжной сборной U21' : 'Ближайшая пауза на матчи сборных', stage: 'extended', extendedPlayers: [], finalPlayers: [], matches: [] };
   const archive = data.archive || [];
@@ -18028,6 +18030,22 @@ async function pgNational(app, subTeam) {
     ? NT_VIEW_STAGE
     : (cur.stage === 'final' ? 'final' : 'extended');
   const activeList = activeStage === 'final' ? (cur.finalPlayers || []) : (cur.extendedPlayers || []);
+  const activeIds = new Set(activeList.map(x => x.id));
+  const normNtSearch = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').trim();
+  const filterAddPlayers = (q) => {
+    const tokens = normNtSearch(q).split(/\s+/).filter(Boolean);
+    if (!tokens.length) return allPlayers;
+    return allPlayers.filter(p => {
+      const clubStr = p.abroadClub ? `${p.abroadClub} ${p.abroadCountry || ''}` : teamName(p.teamId);
+      const hay = normNtSearch(`${p.name || ''} ${clubStr || ''} ${p.pos || ''}`);
+      return tokens.every(t => hay.includes(t));
+    });
+  };
+  const renderAddPlayerOptions = (list) => {
+    if (!list.length) return '<option value="">— Игроки не найдены —</option>';
+    return list.slice(0, 400).map(p => `<option value="${p.id}">${activeIds.has(p.id) ? '✓ ' : ''}${p.abroadClub ? '🌍 ' : ''}[${e(p.pos)}] ${e(p.name)} — ${e(p.abroadClub ? `${p.abroadClub}${p.abroadCountry ? ' · ' + p.abroadCountry : ''}` : teamName(p.teamId))}${p.age != null ? ', ' + p.age + ' л.' : ''}${p.matches > 0 ? `, ${p.matches}м ${p.goals || 0}+${p.assists || 0}` : ''}${activeIds.has(p.id) ? ' (уже в списке)' : ''}</option>`).join('');
+  };
+  const initFilteredAddPlayers = filterAddPlayers(NT_ADD_QUERY);
 
   const sortArrow = (k) => NT_SORT === k ? (NT_SORT_DIR === 'desc' ? ' ▼' : ' ▲') : '';
   const thSort = (k, label, alignLeft = false) =>
@@ -18140,11 +18158,15 @@ async function pgNational(app, subTeam) {
           <button class="btn" id="nt_gen_fin">Сформировать итоговый (25) ИИ</button>
           <button class="btn alt" id="nt_arch_btn">В архив</button>
         </div>
-        <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
-          <select id="nt_add_pid" style="flex:1;min-width:240px">
-            ${allPlayers.slice(0, 600).map(p => `<option value="${p.id}">${p.abroadClub ? '🌍 ' : ''}[${e(p.pos)}] ${e(p.name)} — ${e(p.abroadClub ? `${p.abroadClub}${p.abroadCountry ? ' · ' + p.abroadCountry : ''}` : teamName(p.teamId))}${p.age != null ? ', ' + p.age + ' л.' : ''}${p.matches > 0 ? `, ${p.matches}м ${p.goals || 0}+${p.assists || 0}` : ''}</option>`).join('')}
-          </select>
-          <button class="btn alt" id="nt_add_btn">Добавить в ${activeStage === 'final' ? 'кого вызвали' : 'расширенный состав'}</button>
+        <div style="margin-bottom:12px">
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px">
+            <input id="nt_add_search" type="search" value="${e(NT_ADD_QUERY)}" placeholder="🔍 Поиск футболиста по ФИО (или клубу)..." autocomplete="off" style="flex:1;min-width:220px">
+            <select id="nt_add_pid" style="flex:1.4;min-width:260px">
+              ${renderAddPlayerOptions(initFilteredAddPlayers)}
+            </select>
+            <button class="btn alt" id="nt_add_btn" ${initFilteredAddPlayers.length ? '' : 'disabled'}>Добавить в ${activeStage === 'final' ? 'кого вызвали' : 'расширенный состав'}</button>
+          </div>
+          <div id="nt_add_count" class="small muted">${NT_ADD_QUERY.trim() ? `Найдено: ${initFilteredAddPlayers.length} из ${allPlayers.length}${initFilteredAddPlayers.length > 400 ? ' (показаны первые 400 — уточните ФИО)' : ''}` : `Доступно игроков: ${allPlayers.length}${allPlayers.length > 400 ? ' (в списке первые 400 — введите ФИО для поиска по всем)' : ''}`}</div>
         </div>
         <div style="margin-bottom:6px;font-size:12px;color:var(--muted)">
           ℹ️ <b>Товарищеские матчи ${isU21 ? 'сборной U21' : 'сборной'}:</b> выберите соперника, игровое время в окне ФИФА и настоящее время матча (МСК)
@@ -18237,6 +18259,7 @@ async function pgNational(app, subTeam) {
     if (NT_TEAM === next) return;
     NT_TEAM = next;
     NT_VIEW_STAGE = null;
+    NT_ADD_QUERY = '';
     const targetHash = next === 'u21' ? '#/national/u21' : '#/national';
     if (location.hash !== targetHash) history.replaceState(null, '', targetHash);
     pgNational(app);
@@ -18260,9 +18283,37 @@ async function pgNational(app, subTeam) {
     const r = await act(() => api('/admin/national/generate', { team: NT_TEAM, stage: 'final', title: $('#nt_title').value }), 'Итоговый состав (25) сформирован');
     if (r) pgNational(app);
   };
+  if ($('#nt_add_search') && $('#nt_add_pid')) {
+    const searchEl = $('#nt_add_search');
+    const selEl = $('#nt_add_pid');
+    const countEl = $('#nt_add_count');
+    const addBtnEl = $('#nt_add_btn');
+    searchEl.oninput = () => {
+      NT_ADD_QUERY = searchEl.value || '';
+      const prevVal = selEl.value;
+      const matched = filterAddPlayers(NT_ADD_QUERY);
+      selEl.innerHTML = renderAddPlayerOptions(matched);
+      if (prevVal && matched.some(p => p.id === prevVal)) {
+        selEl.value = prevVal;
+      } else if (matched.length) {
+        selEl.value = matched[0].id;
+      }
+      if (addBtnEl) addBtnEl.disabled = !matched.length;
+      if (countEl) {
+        countEl.textContent = NT_ADD_QUERY.trim()
+          ? `Найдено: ${matched.length} из ${allPlayers.length}${matched.length > 400 ? ' (показаны первые 400 — уточните ФИО)' : ''}`
+          : `Доступно игроков: ${allPlayers.length}${allPlayers.length > 400 ? ' (в списке первые 400 — введите ФИО для поиска по всем)' : ''}`;
+      }
+    };
+  }
   if ($('#nt_add_btn')) $('#nt_add_btn').onclick = async () => {
-    const r = await act(() => api('/admin/national/squad', { team: NT_TEAM, action: 'add', stage: activeStage, pid: $('#nt_add_pid').value }), 'Игрок добавлен в сборную');
-    if (r) pgNational(app);
+    const pid = $('#nt_add_pid')?.value;
+    if (!pid) return;
+    const r = await act(() => api('/admin/national/squad', { team: NT_TEAM, action: 'add', stage: activeStage, pid }), 'Игрок добавлен в сборную');
+    if (r) {
+      NT_ADD_QUERY = '';
+      pgNational(app);
+    }
   };
   if ($('#nt_real_date') && !$('#nt_real_date').value) {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });

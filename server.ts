@@ -24534,8 +24534,9 @@ app.get("/api/admin/players", admin, (req, res) => {
   } else if (eligible === "main" || eligible === "rus") {
     l = l.filter((p) => isRussianNationalEligible(p, "main"));
   }
-  if (q2) l = l.filter((p) => norm(p.name).includes(q2) || norm(p.abroadClub || "").includes(q2) || norm(p.abroadCountry || "").includes(q2));
-  const limit = Math.min(2000, Math.max(50, Number(req.query.limit) || (eligible ? 1500 : 300)));
+  if (q2) l = l.filter((p) => norm(p.name).includes(q2) || norm(p.teamId ? tn(p.teamId) : "").includes(q2) || norm(p.abroadClub || "").includes(q2) || norm(p.abroadCountry || "").includes(q2));
+  const maxLimit = eligible ? 5000 : 2000;
+  const limit = Math.min(maxLimit, Math.max(50, Number(req.query.limit) || (eligible ? 5000 : 300)));
   if (eligible) {
     l = [...l].sort((a, b) => {
       const pa = NATIONAL_POS_ORDER[String(a.pos || "")] ?? 99;
